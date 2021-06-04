@@ -69,7 +69,7 @@ Alternately, you can install the development dependencies with pip:
 .. code-block:: bash
 
     $ pip3 install -e .[dev]
-    $ ./scripts/installation/install_solc.sh
+    $ ./scripts/installation/install_solc.py
 
 
 Development Docker Installation
@@ -91,7 +91,7 @@ Running NuCypher
 
 Then you can do things like:
 
-* Run the tests: ``docker-compose run nucypher-dev pytest``
+* Run the tests: ``docker-compose run nucypher-dev pytest tests/unit``
 * Start up an Ursula: ``docker-compose run nucypher-dev nucypher ursula run --dev --federated-only``
 * Open a shell: ``docker-compose run nucypher-dev bash``
 * Try some of the scripts in ``dev/docker/scripts/``

@@ -30,7 +30,7 @@ from constant_sorrow.constants import (
     NOT_STAKING,
     UNTRACKED_PENDING_TRANSACTION
 )
-from eth_utils import currency, is_checksum_address
+from eth_utils import currency
 from hexbytes.main import HexBytes
 from twisted.internet import reactor, task
 from web3.exceptions import TransactionNotFound
@@ -366,6 +366,24 @@ class Stake:
             result = delta
         return result
 
+    @property
+    def kappa(self) -> float:
+        """Returns the kappa factor for this substake based on its duration.
+        The kappa factor grows linearly with duration, but saturates when it's longer than the maximum rewarded periods.
+        See the economics papers for a more detailed description."""
+        T_max = self.economics.maximum_rewarded_periods
+        kappa = 0.5 * (1 + min(T_max, self.periods_remaining) / T_max)
+        return kappa
+
+    @property
+    def boost(self) -> float:
+        """An alternative representation of the kappa coefficient, easier to understand.
+        Sub-stake boosts can range from 1x (i.e. no boost) to 2x (max boost). """
+
+        min_kappa = 0.5
+        boost = self.kappa / min_kappa
+        return boost
+
     def describe(self) -> Dict[str, str]:
         start_datetime = self.start_datetime.local_datetime().strftime("%b %d %Y")
         end_datetime = self.unlock_datetime.local_datetime().strftime("%b %d %Y")
@@ -375,6 +393,7 @@ class Stake:
                     remaining=self.periods_remaining,
                     enactment=start_datetime,
                     last_period=end_datetime,
+                    boost=f"{self.boost:.2f}x",
                     status=self.status().name)
         return data
 
@@ -545,11 +564,12 @@ class WorkTracker:
 
     ALLOWED_DEVIATION = 0.5  # i.e., up to +50% from the expected confirmation time
 
-    def __init__(self, worker, *args, **kwargs):
+    def __init__(self, worker, stakes, *args, **kwargs):
 
         super().__init__(*args, **kwargs)
         self.log = Logger('stake-tracker')
         self.worker = worker
+        self.stakes = stakes
         self.staking_agent = self.worker.staking_agent
         self.client = self.staking_agent.blockchain.client
 
@@ -782,6 +802,11 @@ class WorkTracker:
             # TODO: Follow-up actions for failed requirements
             return
 
+        self.stakes.refresh()
+        if not self.stakes.has_active_substakes:
+            self.log.warn(f'COMMIT PREVENTED - There are no active stakes.')
+            return
+
         txhash = self.__fire_commitment()
         self.__pending[current_block_number] = txhash
 
@@ -883,3 +908,10 @@ class StakeList(UserList):
 
         # Record most recent cache update
         self.__updated = maya.now()
+
+    @property
+    def has_active_substakes(self) -> bool:
+        current_period = self.staking_agent.get_current_period()
+        for stake in self.data:
+            if not stake.status(current_period=current_period).is_child(Stake.Status.INACTIVE):
+                return True

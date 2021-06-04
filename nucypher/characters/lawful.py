@@ -780,7 +780,7 @@ class Bob(Character):
     def _reencrypt(self,
                    work_order: 'WorkOrder',
                    retain_cfrags: bool = False
-                   ) -> Tuple[bool, Union[List['IndisputableEvidence'], List['CapsuleFrag']]]:
+                   ) -> Tuple[bool, Union[List['Ursula'], List['CapsuleFrag']]]:
 
         if work_order.completed:
             raise TypeError(
@@ -811,10 +811,8 @@ class Bob(Character):
         for capsule, pre_task in work_order.tasks.items():
             if not pre_task.cfrag.verify_correctness(capsule):
                 # TODO: WARNING - This block is untested.
-                from nucypher.policy.collections import IndisputableEvidence
-                evidence = IndisputableEvidence(task=pre_task, work_order=work_order)
                 # I got a lot of problems with you people ...
-                the_airing_of_grievances.append(evidence)
+                the_airing_of_grievances.append(work_order.ursula)
 
         if the_airing_of_grievances:
             return False, the_airing_of_grievances
@@ -1314,6 +1312,12 @@ class Ursula(Teacher, Character, Worker):
                 self.block_until_ready()
             self.stakes.checksum_address = self.checksum_address
             self.stakes.refresh()
+            if not self.stakes.has_active_substakes:
+                msg = "No active stakes found for worker."
+                if emitter:
+                    emitter.message(f"✗ {msg}", color='red')
+                self.log.error(msg)
+                return
             self.work_tracker.start(commit_now=True)  # requirement_func=self._availability_tracker.status)  # TODO: #2277
             if emitter:
                 emitter.message(f"✓ Work Tracking", color='green')
@@ -1354,7 +1358,7 @@ class Ursula(Teacher, Character, Worker):
                     emitter.message(f"{e.__class__.__name__} {e}", color='red', bold=True)
                 raise  # Crash :-(
 
-        if start_reactor:  # ... without hendrix
+        elif start_reactor:  # ... without hendrix
             reactor.run()  # <--- Blocking Call (Reactor)
 
     def stop(self, halt_reactor: bool = False) -> None:

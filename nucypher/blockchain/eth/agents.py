@@ -33,7 +33,7 @@ from typing import Dict, Iterable, List, Tuple, Type, Union, Any, Optional, cast
 from web3.contract import Contract, ContractFunction
 from web3.types import Wei, Timestamp, TxReceipt, TxParams, Nonce
 
-from nucypher.blockchain.eth.aragon import Artifact
+from nucypher.blockchain.eth.aragon import Artifact, Action
 from nucypher.blockchain.eth.constants import (
     ADJUDICATOR_CONTRACT_NAME,
     DISPATCHER_CONTRACT_NAME,
@@ -47,7 +47,8 @@ from nucypher.blockchain.eth.constants import (
     TOKEN_MANAGER_CONTRACT_NAME,
     VOTING_CONTRACT_NAME,
     VOTING_AGGREGATOR_CONTRACT_NAME,
-    WORKLOCK_CONTRACT_NAME
+    WORKLOCK_CONTRACT_NAME,
+    DAO_AGENT_CONTRACT_NAME
 )
 from nucypher.blockchain.eth.decorators import contract_api
 from nucypher.blockchain.eth.events import ContractEvents
@@ -67,7 +68,6 @@ from nucypher.types import (
     StakerInfo,
     PeriodDelta,
     StakingEscrowParameters,
-    Evidence
 )
 from nucypher.utilities.logging import Logger  # type: ignore
 
@@ -179,12 +179,26 @@ class NucypherTokenAgent(EthereumContractAgent):
         return receipt
 
     @contract_api(TRANSACTION)
+    def decrease_allowance(self,
+                           transacting_power: TransactingPower,
+                           spender_address: ChecksumAddress,
+                           decrease: NuNits
+                           ) -> TxReceipt:
+        """Decrease the allowance of a spender address funded by a sender address"""
+        contract_function: ContractFunction = self.contract.functions.decreaseAllowance(spender_address, decrease)
+        receipt: TxReceipt = self.blockchain.send_transaction(contract_function=contract_function,
+                                                              transacting_power=transacting_power)
+        return receipt
+
+    @contract_api(TRANSACTION)
     def approve_transfer(self,
                          amount: NuNits,
                          spender_address: ChecksumAddress,
                          transacting_power: TransactingPower
                          ) -> TxReceipt:
         """Approve the spender address to transfer an amount of tokens on behalf of the sender address"""
+        self._validate_zero_allowance(amount, spender_address, transacting_power)
+
         payload: TxParams = {'gas': Wei(500_000)}  # TODO #842: gas needed for use with geth! <<<< Is this still open?
         contract_function: ContractFunction = self.contract.functions.approve(spender_address, amount)
         receipt: TxReceipt = self.blockchain.send_transaction(contract_function=contract_function,
@@ -208,6 +222,8 @@ class NucypherTokenAgent(EthereumContractAgent):
                          call_data: bytes = b'',
                          gas_limit: Optional[Wei] = None
                          ) -> TxReceipt:
+        self._validate_zero_allowance(amount, target_address, transacting_power)
+
         payload = None
         if gas_limit:  # TODO: Gas management - #842
             payload = {'gas': gas_limit}
@@ -216,6 +232,13 @@ class NucypherTokenAgent(EthereumContractAgent):
                                                                                transacting_power=transacting_power,
                                                                                payload=payload)
         return approve_and_call_receipt
+
+    def _validate_zero_allowance(self, amount, target_address, transacting_power):
+        if amount == 0:
+            return
+        current_allowance = self.get_allowance(owner=transacting_power.account, spender=target_address)
+        if current_allowance != 0:
+            raise self.RequirementError(f"Token allowance for spender {target_address} must be 0")
 
 
 class StakingEscrowAgent(EthereumContractAgent):
@@ -891,7 +914,7 @@ class AdjudicatorAgent(EthereumContractAgent):
     _proxy_name: str = DISPATCHER_CONTRACT_NAME
 
     @contract_api(TRANSACTION)
-    def evaluate_cfrag(self, evidence: Evidence, transacting_power: TransactingPower) -> TxReceipt:
+    def evaluate_cfrag(self, evidence, transacting_power: TransactingPower) -> TxReceipt:
         """Submits proof that a worker created wrong CFrag"""
         payload: TxParams = {'gas': Wei(500_000)}  # TODO #842: gas needed for use with geth.
         contract_function: ContractFunction = self.contract.functions.evaluateCFrag(*evidence.evaluation_arguments())
@@ -901,7 +924,7 @@ class AdjudicatorAgent(EthereumContractAgent):
         return receipt
 
     @contract_api(CONTRACT_CALL)
-    def was_this_evidence_evaluated(self, evidence: Evidence) -> bool:
+    def was_this_evidence_evaluated(self, evidence) -> bool:
         data_hash: bytes = sha256_digest(evidence.task.capsule, evidence.task.cfrag)
         result: bool = self.contract.functions.evaluatedCFrags(data_hash).call()
         return result
@@ -979,7 +1002,7 @@ class WorkLockAgent(EthereumContractAgent):
     def cancel_bid(self, transacting_power: TransactingPower) -> TxReceipt:
         """Cancel bid and refund deposited ETH."""
         contract_function: ContractFunction = self.contract.functions.cancelBid()
-        receipt = self.blockchain.send_transaction(contract_function=contract_function, 
+        receipt = self.blockchain.send_transaction(contract_function=contract_function,
                                                    transacting_power=transacting_power)
         return receipt
 
@@ -988,7 +1011,7 @@ class WorkLockAgent(EthereumContractAgent):
         """Force refund to bidders who can get tokens more than maximum allowed."""
         addresses = sorted(addresses, key=str.casefold)
         contract_function: ContractFunction = self.contract.functions.forceRefund(addresses)
-        receipt = self.blockchain.send_transaction(contract_function=contract_function, 
+        receipt = self.blockchain.send_transaction(contract_function=contract_function,
                                                    transacting_power=transacting_power)
         return receipt
 
@@ -1349,7 +1372,7 @@ class InstanceAgent(EthereumContractAgent):
         super().__init__(contract=contract, provider_uri=provider_uri)
 
 
-class AragonAgent(InstanceAgent):
+class AragonBaseAgent(InstanceAgent):
     """Base agent for Aragon contracts that uses ABIs from artifact.json files"""
 
     def __init__(self, address: str, provider_uri: str = None):
@@ -1357,7 +1380,7 @@ class AragonAgent(InstanceAgent):
         super().__init__(abi=self.artifact.abi, address=address, provider_uri=provider_uri)
 
 
-class ForwarderAgent(AragonAgent):
+class ForwarderAgent(AragonBaseAgent):
     """Agent for Aragon apps that implement the Forwarder interface"""
 
     contract_name = FORWARDER_INTERFACE_NAME
@@ -1413,6 +1436,18 @@ class VotingAggregatorAgent(ForwarderAgent):
 
     contract_name = VOTING_AGGREGATOR_CONTRACT_NAME
 
+    def balance_of(self, address: ChecksumAddress, at_block: Optional[int] = None) -> int:
+        if at_block is None:
+            return self.contract.functions.balanceOf(address).call()
+        else:
+            return self.contract.functions.balanceOfAt(address, at_block).call()
+
+    def total_supply(self, at_block: Optional[int] = None) -> int:
+        if at_block is None:
+            return self.contract.functions.totalSupply().call()
+        else:
+            return self.contract.functions.totalSupplyAt(at_block).call()
+
 
 class TokenManagerAgent(ForwarderAgent):
 
@@ -1433,6 +1468,20 @@ class TokenManagerAgent(ForwarderAgent):
     def _burn(self, holder_address: ChecksumAddress, amount: int) -> ContractFunction:
         function_call = self.contract.functions.burn(holder_address, amount)
         return function_call
+
+
+class AragonAgent(ForwarderAgent):
+
+    contract_name = DAO_AGENT_CONTRACT_NAME
+
+    def _execute(self, target_address: ChecksumAddress, amount: int, data: bytes) -> ContractFunction:
+        function_call = self.contract.functions.execute(target_address, amount, data)
+        return function_call
+
+    def get_execute_call_as_action(self, target_address: ChecksumAddress, data: bytes, amount: int = 0) -> Action:
+        execute_call = self._execute(target_address=target_address, amount=amount, data=data)
+        action = Action(target=self.contract_address, data=execute_call)
+        return action
 
 
 class ContractAgency:
