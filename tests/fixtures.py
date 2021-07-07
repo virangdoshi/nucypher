@@ -58,6 +58,7 @@ from nucypher.config.characters import (
     UrsulaConfiguration
 )
 from nucypher.config.constants import TEMPORARY_DOMAIN
+from nucypher.crypto.keystore import Keystore
 from nucypher.crypto.powers import TransactingPower
 from nucypher.datastore import datastore
 from nucypher.network.nodes import TEACHER_NODES
@@ -174,7 +175,7 @@ def bob_federated_test_config():
 
 
 @pytest.fixture(scope="module")
-def ursula_decentralized_test_config(test_registry):
+def ursula_decentralized_test_config(test_registry, temp_dir_path):
     config = make_ursula_test_configuration(federated=False,
                                             provider_uri=TEST_PROVIDER_URI,
                                             test_registry=test_registry,
@@ -201,8 +202,7 @@ def bob_blockchain_test_config(testerchain, test_registry):
     config = make_bob_test_configuration(federated=False,
                                          provider_uri=TEST_PROVIDER_URI,
                                          test_registry=test_registry,
-                                         checksum_address=testerchain.bob_account,
-                                         )
+                                         checksum_address=testerchain.bob_account)
     yield config
     config.cleanup()
 
@@ -366,8 +366,9 @@ def blockchain_bob(bob_blockchain_test_config, testerchain):
 @pytest.fixture(scope="module")
 def federated_ursulas(ursula_federated_test_config):
     if MOCK_KNOWN_URSULAS_CACHE:
-        # raise RuntimeError("Ursulas cache was unclear at fixture loading time.  Did you use one of the ursula maker functions without cleaning up?")
-        MOCK_KNOWN_URSULAS_CACHE.clear()
+        raise RuntimeError("Ursulas cache was unclear at fixture loading time. "
+                           "Did you use one of the ursula maker functions without cleaning up?")
+        # MOCK_KNOWN_URSULAS_CACHE.clear()
 
     _ursulas = make_federated_ursulas(ursula_config=ursula_federated_test_config,
                                       quantity=NUMBER_OF_URSULAS_IN_DEVELOPMENT_NETWORK)
@@ -881,24 +882,38 @@ def get_random_checksum_address():
 
 @pytest.fixture(scope="module")
 def fleet_of_highperf_mocked_ursulas(ursula_federated_test_config, request):
-    # good_serials = _determine_good_serials(10000, 50000)
+
+    mocks = (
+        mock_secret_source(),
+        mock_cert_storage,
+        mock_cert_loading,
+        mock_rest_app_creation,
+        mock_cert_generation,
+        mock_remember_node,
+        mock_message_verification,
+        )
+
     try:
         quantity = request.param
     except AttributeError:
         quantity = 5000  # Bigass fleet by default; that's kinda the point.
     with GlobalLoggerSettings.pause_all_logging_while():
-        with mock_secret_source():
-            with mock_cert_storage, mock_cert_loading, mock_rest_app_creation, mock_cert_generation, mock_remember_node, mock_message_verification:
-                _ursulas = make_federated_ursulas(ursula_config=ursula_federated_test_config,
-                                                  quantity=quantity, know_each_other=False)
-                all_ursulas = {u.checksum_address: u for u in _ursulas}
+        with contextlib.ExitStack() as stack:
 
-                for ursula in _ursulas:
-                    # FIXME #2588: FleetSensor should not own fully-functional Ursulas.
-                    # It only needs to see whatever public info we can normally get via REST.
-                    # Also sharing mutable Ursulas like that can lead to unpredictable results.
-                    ursula.known_nodes.current_state._nodes = all_ursulas
-                    ursula.known_nodes.current_state.checksum = b"This is a fleet state checksum..".hex()
+            for mock in mocks:
+                stack.enter_context(mock)
+
+            _ursulas = make_federated_ursulas(ursula_config=ursula_federated_test_config,
+                                              quantity=quantity, know_each_other=False)
+            all_ursulas = {u.checksum_address: u for u in _ursulas}
+
+            for ursula in _ursulas:
+                # FIXME #2588: FleetSensor should not own fully-functional Ursulas.
+                # It only needs to see whatever public info we can normally get via REST.
+                # Also sharing mutable Ursulas like that can lead to unpredictable results.
+                ursula.known_nodes.current_state._nodes = all_ursulas
+                ursula.known_nodes.current_state.checksum = b"This is a fleet state checksum..".hex()
+
     yield _ursulas
 
     for ursula in _ursulas:
@@ -1036,3 +1051,9 @@ def stakeholder_configuration_file_location(custom_filepath):
 def mock_teacher_nodes(mocker):
     mock_nodes = tuple(u.rest_url() for u in MOCK_KNOWN_URSULAS_CACHE.values())[0:2]
     mocker.patch.dict(TEACHER_NODES, {TEMPORARY_DOMAIN: mock_nodes}, clear=True)
+
+
+@pytest.fixture(autouse=True)
+def disable_interactive_keystore_generation(mocker):
+    # Do not notify or confirm mnemonic seed words during tests normally
+    mocker.patch.object(Keystore, '_confirm_generate')

@@ -14,7 +14,8 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-import base64
+
+
 from typing import Union
 
 import sha3
@@ -24,15 +25,19 @@ from constant_sorrow import constants
 from cryptography.hazmat.primitives.asymmetric import ec
 from hendrix.deploy.tls import HendrixDeployTLS
 from hendrix.facilities.services import ExistingKeyTLSContextFactory
-from umbral import pre
-from umbral.keys import UmbralPrivateKey, UmbralPublicKey
-from umbral.signing import Signature, Signer
 
 from nucypher.config.constants import MAX_UPLOAD_CONTENT_LENGTH
-from nucypher.crypto import api as API
-from nucypher.crypto.api import generate_teacher_certificate, _TLS_CURVE
 from nucypher.crypto.kits import MessageKit
 from nucypher.crypto.signing import SignatureStamp, StrangerStamp
+from nucypher.crypto.tls import _read_tls_certificate, _TLS_CURVE, generate_self_signed_certificate
+from nucypher.crypto.umbral_adapter import (
+    SecretKey,
+    PublicKey,
+    decrypt_original,
+    decrypt_reencrypted,
+    Signature,
+    Signer
+)
 from nucypher.network.resources import get_static_resources
 
 
@@ -41,8 +46,8 @@ class Keypair(object):
     A parent Keypair class for all types of Keypairs.
     """
 
-    _private_key_source = UmbralPrivateKey.gen_key
-    _public_key_method = "get_pubkey"
+    _private_key_source = SecretKey.random
+    _public_key_method = "public_key"
 
     def __init__(self,
                  private_key=None,
@@ -67,17 +72,6 @@ class Keypair(object):
             raise ValueError(
                 "Either pass a valid key or, if you want to generate keys, set generate_keys_if_needed to True.")
 
-    def serialize_pubkey(self, as_b64=False) -> bytes:
-        """
-        Serializes the pubkey for storage/transport in either urlsafe base64
-        or as a bytestring.
-
-        :param as_b64: Return the pubkey as urlsafe base64 byte string
-        :return: The serialized pubkey in bytes
-        """
-        encoder = base64.urlsafe_b64encode if as_b64 else None
-        return self.pubkey.to_bytes(encoder=encoder)
-
     def fingerprint(self):
         """
         Hashes the key using keccak-256 and returns the hexdigest in bytes.
@@ -101,10 +95,16 @@ class DecryptingKeypair(Keypair):
 
         :return: bytes
         """
-        cleartext = pre.decrypt(ciphertext=message_kit.ciphertext,
-                                capsule=message_kit.capsule,
-                                decrypting_key=self._privkey,
-                                )
+        if len(message_kit) > 0:
+            cleartext = decrypt_reencrypted(self._privkey,
+                                            message_kit._delegating_key,
+                                            message_kit.capsule,
+                                            list(message_kit._cfrags),
+                                            message_kit.ciphertext)
+        else:
+            cleartext = decrypt_original(self._privkey,
+                                         message_kit.capsule,
+                                         message_kit.ciphertext)
 
         return cleartext
 
@@ -117,19 +117,18 @@ class SigningKeypair(Keypair):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-    def sign(self, message: bytes) -> bytes:
+    def sign(self, message: bytes) -> Signature:
         """
-        Signs a hashed message and returns a signature.
+        Signs the given message and returns a signature.
 
         :param message: The message to sign
 
-        :return: Signature in bytes
+        :return: Signature
         """
-        signature_der_bytes = API.ecdsa_sign(message, self._privkey)
-        return Signature.from_bytes(signature_der_bytes, der_encoded=True)
+        return Signer(self._privkey).sign(message)
 
     def get_signature_stamp(self):
-        if self._privkey == constants.PUBLIC_ONLY:
+        if self._privkey is constants.PUBLIC_ONLY:
             return StrangerStamp(verifying_key=self.pubkey)
         else:
             signer = Signer(self._privkey)
@@ -146,25 +145,22 @@ class HostingKeypair(Keypair):
     def __init__(self,
                  host: str,
                  checksum_address: str = None,
-                 private_key: Union[UmbralPrivateKey, UmbralPublicKey] = None,
+                 private_key: Union[SecretKey, PublicKey] = None,
                  certificate=None,
                  certificate_filepath: str = None,
                  generate_certificate=False,
                  ) -> None:
 
         if private_key:
-            if not certificate_filepath:
-                raise ValueError('public certificate required to load a hosting keypair.')
-            from nucypher.config.keyring import _read_tls_public_certificate
-            certificate = _read_tls_public_certificate(filepath=certificate_filepath)
+            if certificate_filepath:
+                certificate = _read_tls_certificate(filepath=certificate_filepath)
             super().__init__(private_key=private_key)
 
         elif certificate:
             super().__init__(public_key=certificate.public_key())
 
         elif certificate_filepath:
-            from nucypher.config.keyring import _read_tls_public_certificate
-            certificate = _read_tls_public_certificate(filepath=certificate_filepath)
+            certificate = _read_tls_certificate(filepath=certificate_filepath)
             super().__init__(public_key=certificate.public_key())
 
         elif generate_certificate:
@@ -172,11 +168,9 @@ class HostingKeypair(Keypair):
                 message = "If you don't supply a TLS certificate, one will be generated for you." \
                           "But for that, you need to pass a host and checksum address."
                 raise TypeError(message)
-
-            certificate, private_key = generate_teacher_certificate(host=host,
-                                                                    checksum_address=checksum_address,
-                                                                    private_key=private_key)
+            certificate, private_key = generate_self_signed_certificate(host=host, private_key=private_key)
             super().__init__(private_key=private_key)
+
         else:
             raise TypeError("You didn't provide a cert, but also told us not to generate keys.  Not sure what to do.")
 

@@ -16,18 +16,19 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import contextlib
-import time
 from collections import defaultdict, deque
 from contextlib import suppress
 from queue import Queue
-from typing import Iterable, List, Set, Tuple, Union
+from typing import Iterable, List, Set, Tuple, Union, Callable
 
 import maya
 import requests
+import time
 from bytestring_splitter import (
     BytestringSplitter,
     PartiallyKwargifiedBytes,
-    VariableLengthBytestring
+    VariableLengthBytestring,
+    BytestringSplittingError
 )
 from constant_sorrow import constant_or_bytes
 from constant_sorrow.constants import (
@@ -44,7 +45,6 @@ from eth_utils import to_checksum_address
 from requests.exceptions import SSLError
 from twisted.internet import reactor, task
 from twisted.internet.defer import Deferred
-from umbral.signing import Signature
 
 from nucypher.acumen.nicknames import Nickname
 from nucypher.acumen.perception import FleetSensor
@@ -55,15 +55,16 @@ from nucypher.blockchain.eth.networks import NetworksInventory
 from nucypher.blockchain.eth.registry import BaseContractRegistry
 from nucypher.config.constants import SeednodeMetadata
 from nucypher.config.storages import ForgetfulNodeStorage
-from nucypher.crypto.api import InvalidNodeCertificate, recover_address_eip_191, verify_eip_191
 from nucypher.crypto.kits import UmbralMessageKit
 from nucypher.crypto.powers import DecryptingPower, NoSigningPower, SigningPower
-from nucypher.crypto.signing import signature_splitter
+from nucypher.crypto.splitters import signature_splitter
+from nucypher.crypto.utils import recover_address_eip_191, verify_eip_191
 from nucypher.network import LEARNING_LOOP_VERSION
 from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.middleware import RestMiddleware
 from nucypher.network.protocols import SuspiciousActivity
 from nucypher.utilities.logging import Logger
+from nucypher.crypto.umbral_adapter import Signature
 
 TEACHER_NODES = {
     NetworksInventory.MAINNET: (
@@ -74,6 +75,7 @@ TEACHER_NODES = {
     NetworksInventory.LYNX: ('https://lynx.nucypher.network:9151',),
     NetworksInventory.IBEX: ('https://ibex.nucypher.network:9151',),
 }
+
 
 class NodeSprout(PartiallyKwargifiedBytes):
     """
@@ -92,11 +94,15 @@ class NodeSprout(PartiallyKwargifiedBytes):
         self._is_finishing = False
         self._finishing_mutex = Queue()
 
+    def __eq__(self, other):
+        try:
+            other_stamp = other.stamp
+        except (AttributeError, NoSigningPower):
+            return False
+        return bytes(self.stamp) == bytes(other_stamp)
+
     def __hash__(self):
-        if not self._hash:
-            self._hash = int.from_bytes(self.public_address,
-                                        byteorder="big")  # stop-propagation logic (ie, only propagate verified, staked nodes) keeps this unique and BFT.
-        return self._hash
+        return int.from_bytes(bytes(self.stamp), byteorder="big")
 
     def __repr__(self):
         if not self._repr:
@@ -133,6 +139,9 @@ class NodeSprout(PartiallyKwargifiedBytes):
             self._nickname = Nickname.from_seed(self.checksum_address)
         return self._nickname
 
+    def rest_url(self):
+        return self.rest_interface.uri
+
     def mature(self):
         if self._is_finishing:
             return self._finishing_mutex.get()
@@ -145,7 +154,7 @@ class NodeSprout(PartiallyKwargifiedBytes):
         self.__dict__ = mature_node.__dict__
 
         # As long as we're doing egregious workarounds, here's another one.  # TODO: 1481
-        filepath = mature_node._cert_store_function(certificate=mature_node.certificate)
+        filepath = mature_node._cert_store_function(certificate=mature_node.certificate, port=mature_node.rest_interface.port)
         mature_node.certificate_filepath = filepath
 
         _finishing_mutex.put(self)
@@ -417,10 +426,7 @@ class Learner:
             stranger_certificate = node.certificate
 
             # Store node's certificate - It has been seen.
-            try:
-                certificate_filepath = self.node_storage.store_node_certificate(certificate=stranger_certificate)
-            except InvalidNodeCertificate:
-                return False  # that was easy
+            certificate_filepath = self.node_storage.store_node_certificate(certificate=stranger_certificate, port=node.rest_interface.port)
 
             # In some cases (seed nodes or other temp stored certs),
             # this will update the filepath from the temp location to this one.
@@ -751,7 +757,7 @@ class Learner:
         #
 
         if signature:
-            is_valid = signature.verify(message, sender_verifying_key)
+            is_valid = signature.verify(sender_verifying_key, message)
             if not is_valid:
                 raise self.InvalidSignature("Signature for message isn't valid: {}".format(signature))
         else:
@@ -1014,7 +1020,7 @@ class Teacher:
                                      "We're version {}."
 
     @classmethod
-    def set_cert_storage_function(cls, node_storage_function):
+    def set_cert_storage_function(cls, node_storage_function: Callable):
         cls._cert_store_function = node_storage_function
 
     def mature(self, *args, **kwargs):
@@ -1198,7 +1204,7 @@ class Teacher:
         # The node's metadata is valid; let's be sure the interface is in order.
         if not certificate_filepath:
             if self.certificate_filepath is CERTIFICATE_NOT_SAVED:
-                self.certificate_filepath = self._cert_store_function(self.certificate)
+                self.certificate_filepath = self._cert_store_function(self.certificate, port=self.rest_interface.port)
             certificate_filepath = self.certificate_filepath
 
         response_data = network_middleware_client.node_information(host=self.rest_interface.host,
@@ -1251,7 +1257,7 @@ class Teacher:
         """
         interface_info_message = self._signable_interface_info_message()  # Contains canonical address.
         message = self.timestamp_bytes() + interface_info_message
-        interface_is_valid = self._interface_signature.verify(message, self.public_keys(SigningPower))
+        interface_is_valid = self._interface_signature.verify(self.public_keys(SigningPower), message)
         self.verified_interface = interface_is_valid
         if interface_is_valid:
             return True

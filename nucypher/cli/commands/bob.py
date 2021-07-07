@@ -200,7 +200,7 @@ class BobCharacterOptions:
         config = self.config_options.create_config(emitter, config_file)
         BOB = make_cli_character(character_config=config,
                                  emitter=emitter,
-                                 unlock_keyring=not self.config_options.dev,
+                                 unlock_keystore=not self.config_options.dev,
                                  unlock_signer=not config.federated_only and config.signer_uri,
                                  teacher_uri=self.teacher_uri,
                                  min_stake=self.min_stake,
@@ -379,9 +379,9 @@ def retrieve(general_config,
             if card.character is not Alice:
                 emitter.error('Grantee card is not an Alice.')
                 raise click.Abort
-            alice_verifying_key = card.verifying_key.hex()
+            alice_verifying_key = bytes(card.verifying_key).hex()
             emitter.message(f'{card.nickname or ("Alice #"+card.id.hex())}\n'
-                            f'Verifying Key  | {card.verifying_key.hex()}',
+                            f'Verifying Key  | {bytes(card.verifying_key).hex()}',
                             color='green')
             if not force:
                 click.confirm('Is this the correct Granter (Alice)?', abort=True)

@@ -90,6 +90,23 @@ CONFIRM_BROADCAST_CREATE_STAKE = "Publish staged stake to the blockchain?"
 
 CONFIRM_INCREASING_STAKE = "Confirm increase stake (index: {stake_index}) by {value}?"
 
+CONFIRM_INCREASING_STAKE_DISCLAIMER = """
+NOTE: Due to a known issue with the StakingEscrow contract, using the increase operation may lead to reduced staking
+rewards for the first period after the increase (GitHub Issue: https://github.com/nucypher/nucypher/issues/2691).
+
+The workaround to increase stake size without reduced staking rewards is the following:
+1. Create a new sub-stake with the same duration as the current sub-stake
+2. Wait until there has been a Worker node commitment made in the period after the sub-stake was created
+3. Once there has been a commitment made in the period after the sub-stake was created, merge the sub-stakes at any time afterwards
+
+For example,
+- If you created a sub-stake in period 10
+- Wait until there has been a commitment made in the period after the sub-stake was created (i.e. in period 11)
+- Then merge the sub-stake in period 11 after the commitment, or during any period afterwards
+
+Are you sure you want to use the increase operation instead of the workaround?
+"""
+
 INSUFFICIENT_BALANCE_TO_INCREASE = "There are no tokens to increase stake"
 
 INSUFFICIENT_BALANCE_TO_CREATE = "Insufficient NU for stake creation."
@@ -285,6 +302,19 @@ SUCCESSFUL_STAKE_PROLONG = 'Successfully Prolonged Stake'
 
 CONFIRM_MERGE = "Publish merging of {stake_index_1} and {stake_index_2} stakes?"
 
+CONFIRM_MERGE_DISCLAIMER = """
+NOTE: Due to a known issue with the StakingEscrow contract, using the merge operation may lead to reduced staking
+rewards for the first period after the merge (GitHub Issue: https://github.com/nucypher/nucypher/issues/2691).
+
+Before merging a sub-stake, ensure that there has been a Worker node commitment that occurred in the period after the
+sub-stake was created. For example,
+- If you created a sub-stake in period 10
+- Wait until there has been a Worker node commitment made in the period after the sub-stake was created (i.e. in period 11)
+- Merge the sub-stake in period 11 after the commitment, or any time afterwards
+
+Are you sure you want to merge now instead of waiting?
+"""
+
 SUCCESSFUL_STAKES_MERGE = 'Successfully Merged Stakes'
 
 CONFIRM_REMOVE_SUBSTAKE = "Publish removal of {stake_index} stake?"
@@ -396,11 +426,11 @@ Do not forget this password, and ideally store it using a password manager.
 
 COLLECT_ETH_PASSWORD = "Enter ethereum account password ({checksum_address})"
 
-COLLECT_NUCYPHER_PASSWORD = 'Enter nucypher keyring password'
+COLLECT_NUCYPHER_PASSWORD = 'Enter nucypher keystore password'
 
 GENERIC_PASSWORD_PROMPT = "Enter password"
 
-DECRYPTING_CHARACTER_KEYRING = 'Authenticating {name}'
+DECRYPTING_CHARACTER_KEYSTORE = 'Authenticating {name}'
 
 
 #
