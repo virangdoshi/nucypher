@@ -17,10 +17,12 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 
 
 import contextlib
+from pathlib import Path
+
 import json
 import random
 import time
-from base64 import b64decode, b64encode
+from base64 import b64encode
 from collections import OrderedDict, defaultdict, namedtuple
 from datetime import datetime
 from functools import partial
@@ -69,13 +71,13 @@ from nucypher.blockchain.eth.registry import BaseContractRegistry
 from nucypher.blockchain.eth.signers.software import Web3Signer
 from nucypher.characters.banners import ALICE_BANNER, BOB_BANNER, ENRICO_BANNER, URSULA_BANNER
 from nucypher.characters.base import Character, Learner
-from nucypher.characters.control.controllers import WebController
-from nucypher.characters.control.emitters import StdoutEmitter
 from nucypher.characters.control.interfaces import AliceInterface, BobInterface, EnricoInterface
 from nucypher.cli.processes import UrsulaCommandProtocol
 from nucypher.config.constants import END_OF_POLICIES_PROBATIONARY_PERIOD
 from nucypher.config.storages import ForgetfulNodeStorage, NodeStorage
-from nucypher.crypto.constants import HRAC_LENGTH, WRIT_CHECKSUM_SIZE
+from nucypher.control.controllers import WebController
+from nucypher.control.emitters import StdoutEmitter
+from nucypher.crypto.constants import HRAC_LENGTH
 from nucypher.crypto.keypairs import HostingKeypair
 from nucypher.crypto.kits import UmbralMessageKit
 from nucypher.crypto.powers import (
@@ -99,13 +101,14 @@ from nucypher.crypto.umbral_adapter import (
 from nucypher.crypto.utils import keccak_digest, encrypt_and_sign
 from nucypher.datastore.datastore import DatastoreTransactionError, RecordNotFound
 from nucypher.datastore.queries import find_expired_policies, find_expired_treasure_maps
+from nucypher.network import treasuremap
 from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.middleware import RestMiddleware
 from nucypher.network.nodes import NodeSprout, TEACHER_NODES, Teacher
 from nucypher.network.protocols import InterfaceInfo, parse_node_uri
 from nucypher.network.server import ProxyRESTServer, TLSHostingPower, make_rest_app
 from nucypher.network.trackers import AvailabilityTracker
-from nucypher.policy.maps import TreasureMap
+from nucypher.policy.maps import TreasureMap, AuthorizedKeyFrag
 from nucypher.policy.orders import WorkOrder
 from nucypher.policy.policies import Policy
 from nucypher.utilities.logging import Logger
@@ -263,7 +266,7 @@ class Alice(Character, BlockchainPolicyAuthor):
         if self.federated_only:
             # Use known nodes
             from nucypher.policy.policies import FederatedPolicy
-            policy = FederatedPolicy(alice=self, **payload)
+            policy = FederatedPolicy(publisher=self, **payload)
 
         else:
             # Sample from blockchain PolicyManager
@@ -621,8 +624,9 @@ class Bob(Character):
 
         return unknown_ursulas, known_ursulas, treasure_map.m
 
-    def _try_orient(self, treasure_map, alice_verifying_key):
-        alice = Alice.from_public_keys(verifying_key=alice_verifying_key)
+    def _try_orient(self, treasure_map, publisher_verifying_key):
+        # TODO: should be rather a Publisher character
+        alice = Alice.from_public_keys(verifying_key=publisher_verifying_key)
         compass = self.make_compass_for_alice(alice)
         try:
             treasure_map.orient(compass)
@@ -642,7 +646,7 @@ class Bob(Character):
             if not self.known_nodes:
                 raise self.NotEnoughTeachers("Can't retrieve without knowing about any nodes at all.  Pass a teacher or seed node.")
 
-        treasure_map = self.get_treasure_map_from_known_ursulas(self.network_middleware, map_identifier)
+        treasure_map = self.get_treasure_map_from_known_ursulas(map_identifier)
 
         self._try_orient(treasure_map, publisher_verifying_key)
         self.treasure_maps[map_identifier] = treasure_map  # TODO: make a part of _try_orient()?
@@ -651,8 +655,8 @@ class Bob(Character):
     def make_compass_for_alice(self, alice):
         return partial(self.verify_from, alice, decrypt=True)
 
-    def construct_policy_hrac(self, publisher_verifying_key: Union[bytes, PublicKey], label: bytes) -> bytes:
-        _hrac = keccak_digest(bytes(publisher_verifying_key) + self.stamp + label)[:HRAC_LENGTH]
+    def construct_policy_hrac(self, publisher_verifying_key: PublicKey, label: bytes) -> bytes:
+        _hrac = keccak_digest(bytes(publisher_verifying_key) + bytes(self.stamp) + label)[:HRAC_LENGTH]
         return _hrac
 
     def construct_map_id(self, publisher_verifying_key: PublicKey, label: bytes):
@@ -666,47 +670,16 @@ class Bob(Character):
 
         return map_id
 
-    def get_treasure_map_from_known_ursulas(self, network_middleware, map_identifier, timeout=3):
+    def get_treasure_map_from_known_ursulas(self, map_identifier: str, timeout=3):
         """
         Iterate through the nodes we know, asking for the TreasureMap.
         Return the first one who has it.
         """
-        if self.federated_only:
-            from nucypher.policy.maps import TreasureMap as _MapClass
-        else:
-            from nucypher.policy.maps import SignedTreasureMap as _MapClass
-
-        start = maya.now()
-
-        # Spend no more than half the timeout finding the nodes.  8 nodes is arbitrary.  Come at me.
-        self.block_until_number_of_known_nodes_is(8, timeout=timeout/2, learn_on_this_thread=True)
-        while True:
-            nodes_with_map = self.matching_nodes_among(self.known_nodes)
-            random.shuffle(nodes_with_map)
-
-            for node in nodes_with_map:
-                try:
-                    response = network_middleware.get_treasure_map_from_node(node, map_identifier)
-                except (*NodeSeemsToBeDown, self.NotEnoughNodes):
-                    continue
-                except network_middleware.NotFound:
-                    self.log.info(f"Node {node} claimed not to have TreasureMap {map_identifier}")
-                    continue
-
-                if response.status_code == 200 and response.content:
-                    try:
-                        treasure_map = _MapClass.from_bytes(response.content)
-                        return treasure_map
-                    except InvalidSignature:
-                        # TODO: What if a node gives a bunk TreasureMap?  NRN
-                        raise
-                else:
-                    continue  # TODO: Actually, handle error case here.  NRN
-            else:
-                self.learn_from_teacher_node()
-
-            if (start - maya.now()).seconds > timeout:
-                raise _MapClass.NowhereToBeFound(f"Asked {len(self.known_nodes)} nodes, but none had map {map_identifier} ")
+        bob_encrypting_key = self.public_keys(DecryptingPower)
+        return treasuremap.get_treasure_map_from_known_ursulas(learner=self,
+                                                               map_identifier=map_identifier,
+                                                               bob_encrypting_key=bob_encrypting_key,
+                                                               timeout=timeout)
 
     def work_orders_for_capsules(self,
                                  *capsules,
@@ -966,22 +939,12 @@ class Bob(Character):
 
         return cleartexts
 
-    def _handle_treasure_map(self, treasure_map, publisher_verifying_key: PublicKey, label: bytes):
+    def _handle_treasure_map(self,
+                             publisher_verifying_key: PublicKey,
+                             label: bytes,
+                             treasure_map: Optional['TreasureMap'] = None,
+                             ) -> 'TreasureMap':
         if treasure_map is not None:
-
-            if self.federated_only:
-                from nucypher.policy.maps import TreasureMap as _MapClass
-            else:
-                from nucypher.policy.maps import SignedTreasureMap as _MapClass
-
-            # TODO: This LBYL is ugly and fraught with danger.  NRN
-            if isinstance(treasure_map, bytes):
-                treasure_map = _MapClass.from_bytes(treasure_map)
-
-            if isinstance(treasure_map, str):
-                tmap_bytes = treasure_map.encode()
-                treasure_map = _MapClass.from_bytes(b64decode(tmap_bytes))
-
             self._try_orient(treasure_map, publisher_verifying_key)
             # self.treasure_maps[treasure_map.public_id()] = treasure_map # TODO: Can we?
         else:
@@ -1001,11 +964,11 @@ class Bob(Character):
                  # Policy
                  *message_kits: UmbralMessageKit,
                  label: bytes,
-                 policy_encrypting_key: PublicKey = None,
-                 treasure_map: Union['TreasureMap', bytes] = None,
+                 policy_encrypting_key: Optional[PublicKey] = None,
+                 treasure_map: Optional['TreasureMap'] = None,
 
                  # Source Authentication
-                 enrico: "Enrico" = None,
+                 enrico: Optional["Enrico"] = None,
                  alice_verifying_key: Union[PublicKey, bytes],
                  publisher_verifying_key: Optional[Union[PublicKey, bytes]] = None,
 
@@ -1016,13 +979,9 @@ class Bob(Character):
 
                  ) -> List[bytes]:
 
-        # Try our best to get an PublicKey instances from input
-        alice_verifying_key = PublicKey.from_bytes(bytes(alice_verifying_key))
         if not publisher_verifying_key:
-            # If an policy relay's verifying key is not passed, use the alice's by default.
+            # If a policy publisher's verifying key is not passed, use Alice's by default.
             publisher_verifying_key = alice_verifying_key
-        else:
-            publisher_verifying_key = PublicKey.from_bytes(bytes(publisher_verifying_key))
 
         treasure_map, m = self._handle_treasure_map(treasure_map=treasure_map,
                                                     publisher_verifying_key=publisher_verifying_key,
@@ -1051,41 +1010,12 @@ class Bob(Character):
     def matching_nodes_among(self,
                              nodes: FleetSensor,
                              no_less_than=7):  # Somewhat arbitrary floor here.
-        # Look for nodes whose checksum address has the second character of Bob's encrypting key in the first
-        # few characters.
-        # Think of it as a cheap knockoff hamming distance.
-        # The good news is that Bob can construct the list easily.
-        # And - famous last words incoming - there's no cognizable attack surface.
-        # Sure, Bob can mine encrypting keypairs until he gets the set of target Ursulas on which Alice can
-        # store a TreasureMap.  And then... ???... profit?
-
-        # Sanity check - do we even have enough nodes?
-        if len(nodes) < no_less_than:
-            raise ValueError(f"Can't select {no_less_than} from {len(nodes)} (Fleet state: {nodes.FleetState})")
-
-        search_boundary = 2
-        target_nodes = []
-        target_hex_match = bytes(self.public_keys(DecryptingPower)).hex()[1]
-        while len(target_nodes) < no_less_than:
-            target_nodes = []
-            search_boundary += 2
-
-            if search_boundary > 42:  # We've searched the entire string and can't match any.  TODO: Portable learning is a nice idea here.
-                # Not enough matching nodes.  Fine, we'll just publish to the first few.
-                try:
-                    # TODO: This is almost certainly happening in a test.  If it does happen in production, it's a bit of a problem.  Need to fix #2124 to mitigate.
-                    target_nodes = list(nodes.values())[0:6]
-                    return target_nodes
-                except IndexError:
-                    raise self.NotEnoughNodes("There aren't enough nodes on the network to enact this policy.  Unless this is day one of the network and nodes are still getting spun up, something is bonkers.")
-
-            # TODO: 1995 all throughout here (we might not (need to) know the checksum address yet; canonical will do.)
-            # This might be a performance issue above a few thousand nodes.
-            target_nodes = [node for node in nodes if target_hex_match in node.checksum_address[2:search_boundary]]
-        return target_nodes
+        bob_encrypting_key = self.public_keys(DecryptingPower)
+        return treasuremap.find_matching_nodes(known_nodes=nodes,
+                                               bob_encrypting_key=bob_encrypting_key,
+                                               no_less_than=no_less_than)
 
     def make_web_controller(drone_bob, crash_on_error: bool = False):
-
         app_name = bytes(drone_bob.stamp).hex()[:6]
         controller = WebController(app_name=app_name,
                                    crash_on_error=crash_on_error,
@@ -1158,9 +1088,9 @@ class Ursula(Teacher, Character, Worker):
                  is_me: bool = True,
 
                  certificate: Certificate = None,
-                 certificate_filepath: str = None,
+                 certificate_filepath: Optional[Path] = None,
 
-                 db_filepath: str = None,
+                 db_filepath: Optional[Path] = None,
                  interface_signature=None,
                  timestamp=None,
                  availability_check: bool = False,  # TODO: Remove from init
@@ -1807,34 +1737,29 @@ class Ursula(Teacher, Character, Worker):
     #
 
     def verify_kfrag_authorization(self,
-                                   alice: Alice,
-                                   kfrag: KeyFrag,
-                                   signed_writ: bytes,
-                                   work_order: 'WorkOrder'
+                                   hrac: bytes,
+                                   author: Alice,
+                                   publisher: Alice,
+                                   authorized_kfrag: AuthorizedKeyFrag,
                                    ) -> VerifiedKeyFrag:
-        from nucypher.policy.orders import WorkOrder  # TODO: resolve ciruclar dependency
 
-        writ_hrac, writ_kfrag_checksum, writ_signature = WorkOrder.signed_writ_splitter(signed_writ)
-        reconstructed_writ = writ_hrac + writ_kfrag_checksum
+        # TODO: should it be a method of AuthorizedKeyFrag?
 
         try:
-            self.verify_from(alice, reconstructed_writ, signature=writ_signature)
+            self.verify_from(publisher, authorized_kfrag.writ, signature=authorized_kfrag.writ_signature)
         except InvalidSignature:
-            raise Policy.Unauthorized  # This isn't from Alice (relayer).
+            # TODO (#2740): differentiate cases for Policy.Unauthorized
+            raise Policy.Unauthorized  # This isn't from Alice (publisher).
 
-        if writ_hrac != work_order.hrac:  # Funky Workorder
+        if authorized_kfrag.hrac != hrac:  # Funky Workorder
             raise Policy.Unauthorized  # Bob, what the *hell* are you doing?
 
-        kfrag_checksum = keccak_digest(bytes(kfrag))[:WRIT_CHECKSUM_SIZE]
-        if kfrag_checksum != writ_kfrag_checksum:
-            raise Policy.Unauthorized  # Bob, Seriously?
-
         try:
-            verified_kfrag = kfrag.verify(verifying_pk=alice.stamp.as_umbral_pubkey())
+            verified_kfrag = authorized_kfrag.kfrag.verify(verifying_pk=author.stamp.as_umbral_pubkey())
         except VerificationError:
             raise Policy.Unauthorized  # WTF, Alice did not generate these KFrags.
 
-        if writ_hrac in self.revoked_policies:
+        if authorized_kfrag.hrac in self.revoked_policies:
             # Note: This is only an off-chain and in-memory check.
             raise Policy.Unauthorized  # Denied
 

@@ -25,16 +25,21 @@ from bytestring_splitter import BytestringSplitter, VariableLengthBytestring
 from eth_typing.evm import ChecksumAddress
 from twisted.internet import reactor
 
-from nucypher.blockchain.eth.agents import StakersReservoir, StakingEscrowAgent
 from nucypher.blockchain.eth.constants import POLICY_ID_LENGTH
 from nucypher.crypto.constants import HRAC_LENGTH
 from nucypher.crypto.kits import RevocationKit
 from nucypher.crypto.powers import TransactingPower
 from nucypher.crypto.splitters import key_splitter
 from nucypher.crypto.utils import keccak_digest
-from nucypher.crypto.umbral_adapter import PublicKey, KeyFrag, Signature
+from nucypher.crypto.umbral_adapter import PublicKey, VerifiedKeyFrag, Signature
 from nucypher.crypto.utils import construct_policy_id
 from nucypher.network.middleware import RestMiddleware
+from nucypher.policy.reservoir import (
+    make_federated_staker_reservoir,
+    MergedReservoir,
+    PrefetchStrategy,
+    make_decentralized_staker_reservoir
+)
 from nucypher.utilities.concurrency import WorkerPool, AllAtOnceFactory
 from nucypher.utilities.logging import Logger
 
@@ -45,30 +50,30 @@ class Arrangement:
     """
 
     splitter = BytestringSplitter(
-        key_splitter,                      # alice_verifying_key
+        key_splitter,                      # publisher_verifying_key
         (bytes, VariableLengthBytestring)  # expiration
     )
 
-    def __init__(self, alice_verifying_key: PublicKey, expiration: maya.MayaDT):
+    def __init__(self, publisher_verifying_key: PublicKey, expiration: maya.MayaDT):
         self.expiration = expiration
-        self.alice_verifying_key = alice_verifying_key
+        self.publisher_verifying_key = publisher_verifying_key
 
     def __bytes__(self):
-        return bytes(self.alice_verifying_key) + bytes(VariableLengthBytestring(self.expiration.iso8601().encode()))
+        return bytes(self.publisher_verifying_key) + bytes(VariableLengthBytestring(self.expiration.iso8601().encode()))
 
     @classmethod
-    def from_alice(cls, alice: 'Alice', expiration: maya.MayaDT) -> 'Arrangement':
-        alice_verifying_key = alice.stamp.as_umbral_pubkey()
-        return cls(alice_verifying_key=alice_verifying_key, expiration=expiration)
+    def from_publisher(cls, publisher: 'Alice', expiration: maya.MayaDT) -> 'Arrangement':
+        publisher_verifying_key = publisher.stamp.as_umbral_pubkey()
+        return cls(publisher_verifying_key=publisher_verifying_key, expiration=expiration)
 
     @classmethod
     def from_bytes(cls, arrangement_as_bytes: bytes) -> 'Arrangement':
-        alice_verifying_key, expiration_bytes = cls.splitter(arrangement_as_bytes)
+        publisher_verifying_key, expiration_bytes = cls.splitter(arrangement_as_bytes)
         expiration = maya.MayaDT.from_iso8601(iso8601_string=expiration_bytes.decode())
-        return cls(alice_verifying_key=alice_verifying_key, expiration=expiration)
+        return cls(publisher_verifying_key=publisher_verifying_key, expiration=expiration)
 
     def __repr__(self):
-        return f"Arrangement(alice={self.alice_verifying_key})"
+        return f"Arrangement(publisher={self.publisher_verifying_key})"
 
 
 class TreasureMapPublisher:
@@ -76,15 +81,31 @@ class TreasureMapPublisher:
     log = Logger('TreasureMapPublisher')
 
     def __init__(self,
-                 worker,
-                 nodes,
-                 percent_to_complete_before_release=5,
-                 threadpool_size=120,
-                 timeout=20):
+                 treasure_map_bytes: bytes,
+                 nodes: Sequence['Ursula'],
+                 network_middleware: RestMiddleware,
+                 percent_to_complete_before_release: int = 5,
+                 threadpool_size: int = 120,
+                 timeout: float = 20):
 
         self._total = len(nodes)
         self._block_until_this_many_are_complete = math.ceil(len(nodes) * percent_to_complete_before_release / 100)
-        self._worker_pool = WorkerPool(worker=worker,
+
+        def put_treasure_map_on_node(node: 'Ursula'):
+            try:
+                response = network_middleware.put_treasure_map_on_node(node=node,
+                                                                       map_payload=treasure_map_bytes)
+            except Exception as e:
+                self.log.warn(f"Putting treasure map on {node} failed: {e}")
+                raise
+
+            # Received an HTTP response
+            if response.status_code != 201:
+                message = f"Putting treasure map on {node} failed with response status: {response.status}"
+                self.log.warn(message)
+            return response
+
+        self._worker_pool = WorkerPool(worker=put_treasure_map_on_node,
                                        value_factory=AllAtOnceFactory(nodes),
                                        target_successes=self._block_until_this_many_are_complete,
                                        timeout=timeout,
@@ -131,49 +152,6 @@ class TreasureMapPublisher:
         self._worker_pool.join()
 
 
-class MergedReservoir:
-    """
-    A reservoir made of a list of addresses and a StakersReservoir.
-    Draws the values from the list first, then from StakersReservoir,
-    then returns None on subsequent calls.
-    """
-
-    def __init__(self, values: Iterable, reservoir: StakersReservoir):
-        self.values = list(values)
-        self.reservoir = reservoir
-
-    def __call__(self) -> Optional[ChecksumAddress]:
-        if self.values:
-            return self.values.pop(0)
-        elif len(self.reservoir) > 0:
-            return self.reservoir.draw(1)[0]
-        else:
-            return None
-
-
-class PrefetchStrategy:
-    """
-    Encapsulates the batch draw strategy from a reservoir.
-    Determines how many values to draw based on the number of values
-    that have already led to successes.
-    """
-
-    def __init__(self, reservoir: MergedReservoir, need_successes: int):
-        self.reservoir = reservoir
-        self.need_successes = need_successes
-
-    def __call__(self, successes: int) -> Optional[List[ChecksumAddress]]:
-        batch = []
-        for i in range(self.need_successes - successes):
-            value = self.reservoir()
-            if value is None:
-                break
-            batch.append(value)
-        if not batch:
-            return None
-        return batch
-
-
 class Policy(ABC):
     """
     An edict by Alice, arranged with n Ursulas, to perform re-encryption for a specific Bob.
@@ -214,11 +192,11 @@ class Policy(ABC):
         """Raised when a policy is revoked has been revoked access"""
 
     def __init__(self,
-                 alice: 'Alice',
+                 publisher: 'Alice',
                  label: bytes,
                  expiration: maya.MayaDT,
                  bob: 'Bob',
-                 kfrags: Sequence[KeyFrag],
+                 kfrags: Sequence[VerifiedKeyFrag],
                  public_key: PublicKey,
                  m: int,
                  ):
@@ -230,7 +208,7 @@ class Policy(ABC):
 
         self.m = m
         self.n = len(kfrags)
-        self.alice = alice
+        self.publisher = publisher
         self.label = label
         self.bob = bob
         self.kfrags = kfrags
@@ -253,7 +231,7 @@ class Policy(ABC):
         Alice and Bob have all the information they need to construct this.
         'Ursula' does not, so we share it with her.
         """
-        self.hrac = keccak_digest(bytes(self.alice.stamp) + bytes(self.bob.stamp) + self.label)[:HRAC_LENGTH]
+        self.hrac = keccak_digest(bytes(self.publisher.stamp) + bytes(self.bob.stamp) + self.label)[:HRAC_LENGTH]
 
     def __repr__(self):
         return f"{self.__class__.__name__}:{self._id.hex()[:6]}"
@@ -276,11 +254,11 @@ class Policy(ABC):
         Attempt to propose an arrangement to the node with the given address.
         """
 
-        if address not in self.alice.known_nodes:
+        if address not in self.publisher.known_nodes:
             raise RuntimeError(f"{address} is not known")
 
-        ursula = self.alice.known_nodes[address]
-        arrangement = Arrangement.from_alice(alice=self.alice, expiration=self.expiration)
+        ursula = self.publisher.known_nodes[address]
+        arrangement = Arrangement.from_publisher(publisher=self.publisher, expiration=self.expiration)
 
         self.log.debug(f"Proposing arrangement {arrangement} to {ursula}")
         negotiation_response = network_middleware.propose_arrangement(ursula, arrangement)
@@ -290,9 +268,10 @@ class Policy(ABC):
             # TODO: What to do in the case of invalid signature?
             # Verify that the sampled ursula agreed to the arrangement.
             ursula_signature = negotiation_response.content
-            self.alice.verify_from(ursula, bytes(arrangement),
-                                   signature=Signature.from_bytes(ursula_signature),
-                                   decrypt=False)
+            self.publisher.verify_from(ursula,
+                                       bytes(arrangement),
+                                       signature=Signature.from_bytes(ursula_signature),
+                                       decrypt=False)
             self.log.debug(f"Arrangement accepted by {ursula}")
         else:
             message = f"Proposing arrangement to {ursula} failed with {status}"
@@ -324,7 +303,7 @@ class Policy(ABC):
         def worker(address):
             return self._propose_arrangement(address, network_middleware)
 
-        self.alice.block_until_number_of_known_nodes_is(self.n, learn_on_this_thread=True, eager=True)
+        self.publisher.block_until_number_of_known_nodes_is(self.n, learn_on_this_thread=True, eager=True)
 
         worker_pool = WorkerPool(worker=worker,
                                  value_factory=value_factory,
@@ -368,12 +347,12 @@ class Policy(ABC):
                            arrangements: Dict['Ursula', Arrangement],
                            ) -> 'TreasureMap':
         """Author a new treasure map for this policy as Alice.."""
-        treasure_map = self._treasure_map_class.author(alice=self.alice,
-                                                       bob=self.bob,
-                                                       label=self.label,
-                                                       ursulas=list(arrangements),
-                                                       kfrags=self.kfrags,
-                                                       m=self.m)
+        treasure_map = self._treasure_map_class.construct_by_publisher(publisher=self.publisher,
+                                                                       bob=self.bob,
+                                                                       label=self.label,
+                                                                       ursulas=list(arrangements),
+                                                                       verified_kfrags=self.kfrags,
+                                                                       m=self.m)
         return treasure_map
 
     def _make_publisher(self,
@@ -382,24 +361,13 @@ class Policy(ABC):
                         ) -> TreasureMapPublisher:
 
         # TODO (#2516): remove hardcoding of 8 nodes
-        self.alice.block_until_number_of_known_nodes_is(8, timeout=2, learn_on_this_thread=True)
-        target_nodes = self.bob.matching_nodes_among(self.alice.known_nodes)
-        treasure_map_bytes = bytes(treasure_map)  # prevent the closure from holding the reference
+        self.publisher.block_until_number_of_known_nodes_is(8, timeout=2, learn_on_this_thread=True)
+        target_nodes = self.bob.matching_nodes_among(self.publisher.known_nodes)
+        treasure_map_bytes = bytes(treasure_map)  # prevent holding of the reference
 
-        def put_treasure_map_on_node(node):
-            try:
-                response = network_middleware.put_treasure_map_on_node(node=node, map_payload=treasure_map_bytes)
-            except Exception as e:
-                self.log.warn(f"Putting treasure map on {node} failed: {e}")
-                raise
-
-            # Received an HTTP response
-            if response.status_code != 201:
-                message = f"Putting treasure map on {node} failed with response status: {response.status}"
-                self.log.warn(message)
-            return response
-
-        return TreasureMapPublisher(worker=put_treasure_map_on_node, nodes=target_nodes)
+        return TreasureMapPublisher(treasure_map_bytes=treasure_map_bytes,
+                                    nodes=target_nodes,
+                                    network_middleware=network_middleware)
 
     def enact(self,
               network_middleware: RestMiddleware,
@@ -412,8 +380,8 @@ class Policy(ABC):
 
         # TODO: Why/is this needed here?
         # Workaround for `RuntimeError: Learning loop is not running.  Start it with start_learning().`
-        if not self.alice._learning_task.running:
-            self.alice.start_learning_loop()
+        if not self.publisher._learning_task.running:
+            self.publisher.start_learning_loop()
 
         arrangements = self._make_arrangements(network_middleware=network_middleware,
                                                handpicked_ursulas=handpicked_ursulas)
@@ -425,7 +393,7 @@ class Policy(ABC):
         treasure_map_publisher = self._make_publisher(treasure_map=treasure_map,
                                                       network_middleware=network_middleware)
 
-        revocation_kit = RevocationKit(treasure_map=treasure_map, signer=self.alice.stamp)  # TODO: Signal revocation without using encrypted kfrag
+        revocation_kit = RevocationKit(treasure_map=treasure_map, signer=self.publisher.stamp)  # TODO: Signal revocation without using encrypted kfrag
 
         enacted_policy = EnactedPolicy(self._id,
                                        self.hrac,
@@ -434,7 +402,7 @@ class Policy(ABC):
                                        treasure_map,
                                        treasure_map_publisher,
                                        revocation_kit,
-                                       self.alice.stamp)
+                                       self.publisher.stamp.as_umbral_pubkey())
 
         if publish_treasure_map is True:
             enacted_policy.publish_treasure_map()
@@ -450,7 +418,7 @@ class Policy(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _make_enactment_payload(self, kfrag: KeyFrag) -> bytes:
+    def _make_enactment_payload(self, kfrag: VerifiedKeyFrag) -> bytes:
         """
         Serializes a given kfrag and policy publication transaction to send to Ursula.
         """
@@ -458,7 +426,6 @@ class Policy(ABC):
 
 
 class FederatedPolicy(Policy):
-
     from nucypher.policy.maps import TreasureMap as __map_class
     _treasure_map_class = __map_class
 
@@ -466,11 +433,8 @@ class FederatedPolicy(Policy):
         return Policy.NotEnoughUrsulas
 
     def _make_reservoir(self, handpicked_addresses):
-        addresses = {
-            ursula.checksum_address: 1 for ursula in self.alice.known_nodes
-            if ursula.checksum_address not in handpicked_addresses}
-
-        return MergedReservoir(handpicked_addresses, StakersReservoir(addresses))
+        return make_federated_staker_reservoir(known_nodes=self.publisher.known_nodes,
+                                               include_addresses=handpicked_addresses)
 
     def _make_enactment_payload(self, kfrag) -> bytes:
         return bytes(kfrag)
@@ -551,23 +515,19 @@ class BlockchainPolicy(Policy):
         return params
 
     def _make_reservoir(self, handpicked_addresses):
-        try:
-            reservoir = self.alice.get_stakers_reservoir(duration=self.payment_periods,
-                                                         without=handpicked_addresses)
-        except StakingEscrowAgent.NotEnoughStakers:
-            # TODO: do that in `get_stakers_reservoir()`?
-            reservoir = StakersReservoir({})
-
-        return MergedReservoir(handpicked_addresses, reservoir)
+        staker_reservoir = make_decentralized_staker_reservoir(staking_agent=self.publisher.staking_agent,
+                                                               duration_periods=self.payment_periods,
+                                                               include_addresses=handpicked_addresses)
+        return staker_reservoir
 
     def _publish_to_blockchain(self, ursulas) -> dict:
 
         addresses = [ursula.checksum_address for ursula in ursulas]
 
         # Transact  # TODO: Move this logic to BlockchainPolicyActor
-        receipt = self.alice.policy_agent.create_policy(
+        receipt = self.publisher.policy_agent.create_policy(
             policy_id=self.hrac,  # bytes16 _policyID
-            transacting_power=self.alice.transacting_power,
+            transacting_power=self.publisher.transacting_power,
             value=self.value,
             end_timestamp=self.expiration.epoch,  # uint16 _numberOfPeriods
             node_addresses=addresses  # address[] memory _nodes
@@ -588,7 +548,7 @@ class BlockchainPolicy(Policy):
                            ) -> 'TreasureMap':
 
         treasure_map = super()._make_treasure_map(network_middleware, arrangements)
-        transacting_power = self.alice._crypto_power.power_ups(TransactingPower)
+        transacting_power = self.publisher._crypto_power.power_ups(TransactingPower)
         treasure_map.include_blockchain_signature(transacting_power.sign_message)
         return treasure_map
 
@@ -603,7 +563,7 @@ class EnactedPolicy:
                  treasure_map: 'TreasureMap',
                  treasure_map_publisher: TreasureMapPublisher,
                  revocation_kit: RevocationKit,
-                 alice_verifying_key: PublicKey,
+                 publisher_verifying_key: PublicKey,
                  ):
 
         self.id = id # TODO: is it even used anywhere?
@@ -614,7 +574,7 @@ class EnactedPolicy:
         self.treasure_map_publisher = treasure_map_publisher
         self.revocation_kit = revocation_kit
         self.n = len(self.treasure_map.destinations)
-        self.alice_verifying_key = alice_verifying_key
+        self.publisher_verifying_key = publisher_verifying_key
 
     def publish_treasure_map(self):
         self.treasure_map_publisher.start()

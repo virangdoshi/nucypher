@@ -23,6 +23,7 @@ import shutil
 import tempfile
 from datetime import datetime, timedelta
 from functools import partial
+from pathlib import Path
 from typing import Callable, Tuple
 
 import maya
@@ -49,7 +50,7 @@ from nucypher.blockchain.eth.interfaces import BlockchainInterfaceFactory
 from nucypher.blockchain.eth.registry import InMemoryContractRegistry, LocalContractRegistry
 from nucypher.blockchain.eth.signers.software import Web3Signer
 from nucypher.blockchain.eth.token import NU
-from nucypher.characters.control.emitters import StdoutEmitter
+from nucypher.control.emitters import StdoutEmitter
 from nucypher.characters.lawful import Enrico
 from nucypher.config.characters import (
     AliceConfiguration,
@@ -63,6 +64,7 @@ from nucypher.crypto.powers import TransactingPower
 from nucypher.datastore import datastore
 from nucypher.network.nodes import TEACHER_NODES
 from nucypher.utilities.logging import GlobalLoggerSettings, Logger
+from nucypher.utilities.porter.porter import Porter
 from tests.constants import (
     BASE_TEMP_DIR,
     BASE_TEMP_PREFIX,
@@ -117,15 +119,16 @@ test_logger = Logger("test-logger")
 @pytest.fixture(scope="function")
 def tempfile_path():
     fd, path = tempfile.mkstemp()
+    path = Path(path)
     yield path
     os.close(fd)
-    os.remove(path)
+    path.unlink()
 
 
 @pytest.fixture(scope="module")
 def temp_dir_path():
     temp_dir = tempfile.TemporaryDirectory(prefix='nucypher-test-')
-    yield temp_dir.name
+    yield Path(temp_dir.name)
     temp_dir.cleanup()
 
 
@@ -139,7 +142,7 @@ def test_datastore():
 def certificates_tempdir():
     custom_filepath = '/tmp/nucypher-test-certificates-'
     cert_tmpdir = tempfile.TemporaryDirectory(prefix=custom_filepath)
-    yield cert_tmpdir.name
+    yield Path(cert_tmpdir.name)
     cert_tmpdir.cleanup()
 
 
@@ -276,6 +279,23 @@ def enacted_blockchain_policy(idle_blockchain_policy, blockchain_ursulas):
                                                   handpicked_ursulas=list(blockchain_ursulas))
     enacted_policy.treasure_map_publisher.block_until_complete()
     return enacted_policy
+
+
+@pytest.fixture(scope="function")
+def random_blockchain_policy(testerchain, blockchain_alice, blockchain_bob, token_economics):
+    random_label = generate_random_label()
+    periods = token_economics.minimum_locked_periods // 2
+    days = periods * (token_economics.hours_per_period // 24)
+    now = testerchain.w3.eth.getBlock('latest').timestamp
+    expiration = maya.MayaDT(now).add(days=days - 1)
+    n = 3
+    m = 2
+    policy = blockchain_alice.create_policy(blockchain_bob,
+                                            label=random_label,
+                                            m=m, n=n,
+                                            value=n * periods * 100,
+                                            expiration=expiration)
+    return policy
 
 
 @pytest.fixture(scope="module")
@@ -416,6 +436,35 @@ def lonely_ursula_maker(ursula_federated_test_config):
     _maker = _PartialUrsulaMaker()
     yield _maker
     _maker.clean()
+
+
+#
+# Porter
+#
+@pytest.fixture(scope="module")
+def federated_porter(federated_ursulas):
+    porter = Porter(domain=TEMPORARY_DOMAIN,
+                    abort_on_learning_error=True,
+                    start_learning_now=True,
+                    known_nodes=federated_ursulas,
+                    verify_node_bonding=False,
+                    federated_only=True,
+                    network_middleware=MockRestMiddleware())
+    yield porter
+    porter.stop_learning_loop()
+
+
+@pytest.fixture(scope="module")
+def blockchain_porter(blockchain_ursulas, testerchain, test_registry):
+    porter = Porter(domain=TEMPORARY_DOMAIN,
+                    abort_on_learning_error=True,
+                    start_learning_now=True,
+                    known_nodes=blockchain_ursulas,
+                    provider_uri=TEST_PROVIDER_URI,
+                    registry=test_registry,
+                    network_middleware=MockRestMiddleware())
+    yield porter
+    porter.stop_learning_loop()
 
 
 #
@@ -589,8 +638,8 @@ def agency_local_registry(testerchain, agency, test_registry):
     registry = LocalContractRegistry(filepath=MOCK_REGISTRY_FILEPATH)
     registry.write(test_registry.read())
     yield registry
-    if os.path.exists(MOCK_REGISTRY_FILEPATH):
-        os.remove(MOCK_REGISTRY_FILEPATH)
+    if MOCK_REGISTRY_FILEPATH.exists():
+        MOCK_REGISTRY_FILEPATH.unlink()
 
 
 @pytest.fixture(scope="module")
@@ -737,12 +786,12 @@ def mock_ursula_reencrypts():
 
 @pytest.fixture(scope='session')
 def stakeholder_config_file_location():
-    path = os.path.join('/', 'tmp', 'nucypher-test-stakeholder.json')
-    if os.path.exists(path):
-        os.remove(path)
+    path = Path('/', 'tmp', 'nucypher-test-stakeholder.json')
+    if path.exists():
+        path.unlink()
     yield path
-    if os.path.exists(path):
-        os.remove(path)
+    if path.exists():
+        path.unlink()
 
 
 @pytest.fixture(scope='module')
@@ -751,8 +800,8 @@ def software_stakeholder(testerchain, agency, stakeholder_config_file_location, 
 
     # Setup
     path = stakeholder_config_file_location
-    if os.path.exists(path):
-        os.remove(path)
+    if path.exists():
+        path.unlink()
 
     #                          0xaAa482c790b4301bE18D75A0D1B11B2ACBEF798B
     stakeholder_private_key = '255f64a948eeb1595b8a2d1e76740f4683eca1c8f1433d13293db9b6e27676cc'
@@ -787,8 +836,8 @@ def software_stakeholder(testerchain, agency, stakeholder_config_file_location, 
 
     # Teardown
     yield stakeholder
-    if os.path.exists(path):
-        os.remove(path)
+    if path.exists():
+        path.unlink()
 
 
 @pytest.fixture(scope="module")
@@ -981,6 +1030,7 @@ def nominal_federated_configuration_fields():
     del config
 
 
+# TODO: Not used?
 @pytest.fixture(scope='module')
 def mock_allocation_infile(testerchain, token_economics, get_random_checksum_address):
     accounts = [get_random_checksum_address() for _ in range(10)]
@@ -996,19 +1046,19 @@ def mock_allocation_infile(testerchain, token_economics, get_random_checksum_add
         file.write(json.dumps(allocation_data))
 
     yield MOCK_ALLOCATION_INFILE
-    if os.path.isfile(MOCK_ALLOCATION_INFILE):
-        os.remove(MOCK_ALLOCATION_INFILE)
+    if MOCK_ALLOCATION_INFILE.is_file():
+        MOCK_ALLOCATION_INFILE.unlink()
 
 
 @pytest.fixture(scope='function')
 def new_local_registry():
     filename = f'{BASE_TEMP_PREFIX}mock-empty-registry-{datetime.now().strftime(DATETIME_FORMAT)}.json'
-    registry_filepath = os.path.join(BASE_TEMP_DIR, filename)
+    registry_filepath = BASE_TEMP_DIR / filename
     registry = LocalContractRegistry(filepath=registry_filepath)
     registry.write(InMemoryContractRegistry().read())
     yield registry
-    if os.path.exists(registry_filepath):
-        os.remove(registry_filepath)
+    if registry_filepath.exists():
+        registry_filepath.unlink()
 
 
 @pytest.fixture(scope='module')
@@ -1034,16 +1084,14 @@ def custom_filepath_2():
 
 
 @pytest.fixture(scope='module')
-def worker_configuration_file_location(custom_filepath):
-    _configuration_file_location = os.path.join(MOCK_CUSTOM_INSTALLATION_PATH,
-                                                UrsulaConfiguration.generate_filename())
+def worker_configuration_file_location(custom_filepath) -> Path:
+    _configuration_file_location = MOCK_CUSTOM_INSTALLATION_PATH / UrsulaConfiguration.generate_filename()
     return _configuration_file_location
 
 
 @pytest.fixture(scope='module')
-def stakeholder_configuration_file_location(custom_filepath):
-    _configuration_file_location = os.path.join(MOCK_CUSTOM_INSTALLATION_PATH,
-                                                StakeHolderConfiguration.generate_filename())
+def stakeholder_configuration_file_location(custom_filepath) -> Path:
+    _configuration_file_location = MOCK_CUSTOM_INSTALLATION_PATH / StakeHolderConfiguration.generate_filename()
     return _configuration_file_location
 
 
@@ -1057,3 +1105,16 @@ def mock_teacher_nodes(mocker):
 def disable_interactive_keystore_generation(mocker):
     # Do not notify or confirm mnemonic seed words during tests normally
     mocker.patch.object(Keystore, '_confirm_generate')
+
+
+#
+# Web Auth
+#
+@pytest.fixture(scope='module')
+def basic_auth_file(temp_dir_path):
+    basic_auth = Path(temp_dir_path) / 'htpasswd'
+    with basic_auth.open("w") as f:
+        # username: "admin", password: "admin"
+        f.write("admin:$apr1$hlEpWVoI$0qjykXrvdZ0yO2TnBggQO0\n")
+    yield basic_auth
+    basic_auth.unlink()

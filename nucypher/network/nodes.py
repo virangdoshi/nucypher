@@ -19,20 +19,17 @@ import contextlib
 import time
 from collections import defaultdict, deque
 from contextlib import suppress
+from pathlib import Path
 from queue import Queue
-from typing import Callable
-from typing import Iterable, List
-from typing import Set, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Set, Tuple, Union
 
 import maya
 import requests
 from bytestring_splitter import (
     BytestringSplitter,
+    BytestringSplittingError,
     PartiallyKwargifiedBytes,
     VariableLengthBytestring
-)
-from bytestring_splitter import (
-    BytestringSplittingError
 )
 from constant_sorrow import constant_or_bytes
 from constant_sorrow.constants import (
@@ -194,6 +191,8 @@ class Learner:
     # For Keeps
     __DEFAULT_NODE_STORAGE = ForgetfulNodeStorage
     __DEFAULT_MIDDLEWARE_CLASS = RestMiddleware
+
+    _crashed = False  # moved from Character - why was this in Character and not Learner before
 
     LEARNER_VERSION = LEARNING_LOOP_VERSION
     LOWEST_COMPATIBLE_VERSION = 2  # Disallow versions lower than this
@@ -658,8 +657,7 @@ class Learner:
                                              addresses: Set,
                                              timeout=LEARNING_TIMEOUT,
                                              allow_missing=0,
-                                             learn_on_this_thread=False,
-                                             verify_now=False):
+                                             learn_on_this_thread=False):
         start = maya.now()
         starting_round = self._learning_round
 
@@ -971,7 +969,7 @@ class Teacher:
     def __init__(self,
                  domain: str,  # TODO: Consider using a Domain type
                  certificate: Certificate,
-                 certificate_filepath: str,
+                 certificate_filepath: Path,
                  interface_signature=NOT_SIGNED.bool_value(False),
                  timestamp=NOT_SIGNED,
                  decentralized_identity_evidence=NOT_SIGNED,
@@ -1175,7 +1173,7 @@ class Teacher:
     def verify_node(self,
                     network_middleware_client,
                     registry: BaseContractRegistry = None,
-                    certificate_filepath: str = None,
+                    certificate_filepath: Optional[Path] = None,
                     force: bool = False
                     ) -> bool:
         """

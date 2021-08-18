@@ -19,9 +19,10 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 import os
 import uuid
 import weakref
+from pathlib import Path
+
 from datetime import datetime, timedelta
 from typing import Tuple
-
 from constant_sorrow import constants
 from constant_sorrow.constants import FLEET_STATES_MATCH, RELAX, NOT_STAKING
 from flask import Flask, Response, jsonify, request
@@ -44,10 +45,10 @@ from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.protocols import InterfaceInfo
 from nucypher.utilities.logging import Logger
 
-HERE = BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-TEMPLATES_DIR = os.path.join(HERE, "templates")
+HERE = BASE_DIR = Path(__file__).parent
+TEMPLATES_DIR = HERE / "templates"
 
-status_template = Template(filename=os.path.join(TEMPLATES_DIR, "basic_status.mako")).get_def('main')
+status_template = Template(filename=str(TEMPLATES_DIR / "basic_status.mako")).get_def('main')
 
 
 class ProxyRESTServer:
@@ -76,7 +77,7 @@ class ProxyRESTServer:
 
 
 def make_rest_app(
-        db_filepath: str,
+        db_filepath: Path,
         this_node,
         domain,
         log: Logger = Logger("http-application-layer")
@@ -195,10 +196,10 @@ def _make_rest_app(datastore: Datastore, this_node, domain: str, log: Logger) ->
         if hrac in this_node.revoked_policies:
             return Response(response="Invalid KFrag sender.", status=401)  # 401 - Unauthorized
 
-        # Alice & Relayer
+        # Alice & Publisher
         alice = _alice_class.from_public_keys(verifying_key=work_order.alice_verifying_key)
         alice_verifying_key = alice.stamp.as_umbral_pubkey()
-        policy_relayer = _alice_class.from_public_keys(verifying_key=work_order.publisher_verifying_key)
+        policy_publisher = _alice_class.from_public_keys(verifying_key=work_order.publisher_verifying_key)
 
         # Bob
         bob_ip_address = request.remote_addr
@@ -219,14 +220,21 @@ def _make_rest_app(datastore: Datastore, this_node, domain: str, log: Logger) ->
             return Response(response="KFrag decryption failed.", status=403)   # 403 - Forbidden
 
         # Verify KFrag Authorization (offchain)
-        signed_writ, kfrag = work_order.kfrag_payload_splitter(plaintext_kfrag_payload)
+        from nucypher.policy.maps import AuthorizedKeyFrag
         try:
-            verified_kfrag = this_node.verify_kfrag_authorization(
-                alice=policy_relayer,
-                kfrag=kfrag,
-                signed_writ=signed_writ,
-                work_order=work_order
-            )
+            authorized_kfrag = AuthorizedKeyFrag.from_bytes(plaintext_kfrag_payload)
+        except ValueError:
+            message = f'{bob_identity_message} Invalid AuthorizedKeyFrag.'
+            log.info(message)
+            this_node.suspicious_activities_witnessed['unauthorized'].append(message)
+            return Response(message, status=401)  # 401 - Unauthorized
+
+        try:
+            verified_kfrag = this_node.verify_kfrag_authorization(hrac=work_order.hrac,
+                                                                  author=alice,
+                                                                  publisher=policy_publisher,
+                                                                  authorized_kfrag=authorized_kfrag)
+
         except Policy.Unauthorized:
             message = f'{bob_identity_message} Unauthorized work order.'
             log.info(message)
@@ -240,7 +248,7 @@ def _make_rest_app(datastore: Datastore, this_node, domain: str, log: Logger) ->
                 this_node.verify_policy_payment(hrac=hrac)
             except Policy.Unpaid:
                 message = f"{bob_identity_message} Policy {hrac.hex()} is unpaid."
-                record = (policy_relayer, message)
+                record = (policy_publisher, message)
                 this_node.suspicious_activities_witnessed['freeriders'].append(record)
                 return Response(message, status=402)  # 402 - Payment Required
             except Policy.Unknown:

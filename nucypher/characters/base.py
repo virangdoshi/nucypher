@@ -18,6 +18,7 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 
 import contextlib
 from contextlib import suppress
+from pathlib import Path
 from typing import ClassVar, Dict, List, Optional, Union
 
 from constant_sorrow import default_constant_splitter
@@ -39,7 +40,8 @@ from eth_utils import to_canonical_address, to_checksum_address
 from nucypher.acumen.nicknames import Nickname
 from nucypher.blockchain.eth.registry import BaseContractRegistry, InMemoryContractRegistry
 from nucypher.blockchain.eth.signers.base import Signer
-from nucypher.characters.control.controllers import CLIController, JSONRPCController
+from nucypher.characters.control.controllers import CharacterCLIController
+from nucypher.control.controllers import JSONRPCController
 from nucypher.crypto.keystore import Keystore
 from nucypher.crypto.kits import UmbralMessageKit
 from nucypher.crypto.powers import (
@@ -67,7 +69,6 @@ class Character(Learner):
     _display_name_template = "({})⇀{}↽ ({})"  # Used in __repr__ and in cls.from_bytes
     _default_crypto_powerups = None
     _stamp = None
-    _crashed = False
 
     def __init__(self,
                  domain: str = None,
@@ -345,7 +346,7 @@ class Character(Learner):
         known_node_class.set_federated_mode(federated_only)
 
     # TODO: Unused
-    def store_metadata(self, filepath: str) -> str:
+    def store_metadata(self, filepath: Path) -> Path:
         """
         Save this node to the disk.
         :param filepath: Output filepath to save node metadata.
@@ -512,9 +513,9 @@ class Character(Learner):
 
     def make_cli_controller(self, crash_on_error: bool = False):
         app_name = bytes(self.stamp).hex()[:6]
-        controller = CLIController(app_name=app_name,
-                                   crash_on_error=crash_on_error,
-                                   interface=self.interface)
+        controller = CharacterCLIController(app_name=app_name,
+                                            crash_on_error=crash_on_error,
+                                            interface=self.interface)
 
         self.controller = controller
         return controller

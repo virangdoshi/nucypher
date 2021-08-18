@@ -102,7 +102,7 @@ from nucypher.blockchain.eth.utils import (
     prettify_eth_amount
 )
 from nucypher.characters.banners import STAKEHOLDER_BANNER
-from nucypher.characters.control.emitters import StdoutEmitter
+from nucypher.control.emitters import StdoutEmitter
 from nucypher.config.constants import DEFAULT_CONFIG_ROOT
 from nucypher.crypto.powers import TransactingPower
 from nucypher.types import NuNits, Period
@@ -325,8 +325,8 @@ class ContractAdministrator(BaseActor):
     def save_deployment_receipts(self, receipts: dict, filename_prefix: str = 'deployment') -> str:
         config_root = DEFAULT_CONFIG_ROOT  # We force the use of the default here.
         filename = f'{filename_prefix}-receipts-{self.deployer_address[:6]}-{maya.now().epoch}.json'
-        filepath = os.path.join(config_root, filename)
-        os.makedirs(config_root, exist_ok=True)
+        filepath = config_root / filename
+        config_root.mkdir(parents=True, exist_ok=True)
         with open(filepath, 'w') as file:
             data = dict()
             for contract_name, contract_receipts in receipts.items():
@@ -1298,12 +1298,6 @@ class BlockchainPolicyAuthor(NucypherTokenActor):
         payload = {**blockchain_payload, **policy_end_time}
         return payload
 
-    def get_stakers_reservoir(self, **options) -> StakersReservoir:
-        """
-        Get a sampler object containing the currently registered stakers.
-        """
-        return self.staking_agent.get_stakers_reservoir(**options)
-
     def create_policy(self, *args, **kwargs):
         """
         Hence the name, a BlockchainPolicyAuthor can create
@@ -1313,7 +1307,7 @@ class BlockchainPolicyAuthor(NucypherTokenActor):
 
         """
         from nucypher.policy.policies import BlockchainPolicy
-        blockchain_policy = BlockchainPolicy(alice=self, *args, **kwargs)
+        blockchain_policy = BlockchainPolicy(publisher=self, *args, **kwargs)
         return blockchain_policy
 
 

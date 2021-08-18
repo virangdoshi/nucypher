@@ -22,7 +22,7 @@ from constant_sorrow.constants import NO_PASSWORD
 from mnemonic.mnemonic import Mnemonic
 
 from nucypher.blockchain.eth.decorators import InvalidChecksumAddress
-from nucypher.characters.control.emitters import StdoutEmitter
+from nucypher.control.emitters import StdoutEmitter
 from nucypher.cli.actions.auth import (
     get_client_password,
     get_nucypher_password,
@@ -149,11 +149,11 @@ def test_unlock_nucypher_keystore_dev_mode(mocker, test_emitter, capsys, alice_b
 
 
 def test_unlock_nucypher_keystore(mocker,
-                                 test_emitter,
-                                 capsys,
-                                 alice_blockchain_test_config,
-                                 patch_keystore,
-                                 tmpdir):
+                                  test_emitter,
+                                  capsys,
+                                  alice_blockchain_test_config,
+                                  patch_keystore,
+                                  tmpdir):
 
     # Setup
     # Do not test "real" unlocking here, just the plumbing

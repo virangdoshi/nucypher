@@ -15,10 +15,11 @@
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 from base64 import b64decode
+from pathlib import Path
 
 import click
 
-from nucypher.characters.control.emitters import StdoutEmitter
+from nucypher.control.emitters import StdoutEmitter
 from nucypher.characters.control.interfaces import BobInterface
 from nucypher.characters.lawful import Alice
 from nucypher.cli.actions.auth import get_nucypher_password
@@ -68,7 +69,7 @@ class BobConfigOptions:
     def __init__(self, 
                  provider_uri: str,
                  network: str,
-                 registry_filepath: str,
+                 registry_filepath: Path,
                  checksum_address: str,
                  discovery_port: int,
                  dev: bool,
@@ -93,7 +94,7 @@ class BobConfigOptions:
         self.federated_only = federated_only
         self.lonely = lonely
 
-    def create_config(self, emitter: StdoutEmitter, config_file: str) -> BobConfiguration:
+    def create_config(self, emitter: StdoutEmitter, config_file: Path) -> BobConfiguration:
         if self.dev:
             return BobConfiguration(
                 emitter=emitter,
@@ -132,7 +133,7 @@ class BobConfigOptions:
                 handle_missing_configuration_file(character_config_class=BobConfiguration,
                                                   config_file=config_file)
 
-    def generate_config(self, emitter: StdoutEmitter, config_root: str) -> BobConfiguration:
+    def generate_config(self, emitter: StdoutEmitter, config_root: Path) -> BobConfiguration:
 
         checksum_address = self.checksum_address
         if not checksum_address and not self.federated_only:
@@ -265,7 +266,7 @@ def run(general_config, character_options, config_file, controller_port, dry_run
     # Start Controller
     controller = BOB.make_web_controller(crash_on_error=general_config.debug)
     BOB.log.info('Starting HTTP Character Web Controller')
-    return controller.start(http_port=controller_port, dry_run=dry_run)
+    return controller.start(port=controller_port, dry_run=dry_run)
 
 
 @bob.command()

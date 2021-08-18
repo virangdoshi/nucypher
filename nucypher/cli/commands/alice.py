@@ -14,11 +14,11 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
+from pathlib import Path
 
 import click
 
-from nucypher.characters.control.emitters import StdoutEmitter
+from nucypher.control.emitters import StdoutEmitter
 from nucypher.characters.control.interfaces import AliceInterface
 from nucypher.cli.actions.auth import get_nucypher_password
 from nucypher.cli.actions.collect import collect_bob_public_keys, collect_policy_parameters
@@ -84,7 +84,7 @@ class AliceConfigOptions:
                  federated_only: bool,
                  discovery_port: int,
                  pay_with: str,
-                 registry_filepath: str,
+                 registry_filepath: Path,
                  middleware: RestMiddleware,
                  gas_strategy: str,
                  max_gas_price: int,  # gwei
@@ -185,7 +185,7 @@ class AliceFullConfigOptions:
         self.n = n
         self.payment_periods = payment_periods
 
-    def generate_config(self, emitter: StdoutEmitter, config_root: str) -> AliceConfiguration:
+    def generate_config(self, emitter: StdoutEmitter, config_root: Path) -> AliceConfiguration:
 
         opts = self.config_options
 
@@ -362,7 +362,7 @@ def run(general_config, character_options, config_file, controller_port, dry_run
             controller = ALICE.make_web_controller(crash_on_error=general_config.debug)
             ALICE.log.info('Starting HTTP Character Web Controller')
             emitter.message(f'Running HTTP Alice Controller at http://localhost:{controller_port}')
-            return controller.start(http_port=controller_port, dry_run=dry_run)
+            return controller.start(port=controller_port, dry_run=dry_run)
 
     # Handle Crash
     except Exception as e:
