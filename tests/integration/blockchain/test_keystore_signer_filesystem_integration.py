@@ -21,7 +21,7 @@ import shutil
 import pytest
 from cytoolz.dicttoolz import assoc
 from eth_account import Account
-from eth_account._utils.transactions import Transaction
+from eth_account._utils.legacy_transactions import Transaction
 from eth_utils.address import to_checksum_address
 from hexbytes.main import HexBytes
 
@@ -52,7 +52,7 @@ def mock_key():
 
 @pytest.fixture(scope='module')
 def mock_account(mock_key):
-    account = Account.from_key(private_key=mock_key.privateKey)
+    account = Account.from_key(private_key=mock_key.key)
     return account
 
 
@@ -205,7 +205,7 @@ def test_keystore_sign_message(mocker, good_signer, mock_account, mock_key):
 
     # unlock
     mock_decrypt = mocker.patch.object(Account, 'decrypt', autospec=True)
-    mock_decrypt.return_value = mock_key.privateKey
+    mock_decrypt.return_value = mock_key.key
     successful_unlock = good_signer.unlock_account(account=mock_account.address, password=INSECURE_DEVELOPMENT_PASSWORD)
     assert successful_unlock
 

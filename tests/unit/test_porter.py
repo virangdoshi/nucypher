@@ -14,37 +14,33 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
+
+
 from base64 import b64encode
 
 import pytest
 
+from nucypher.core import RetrievalKit as RetrievalKitClass
+
 from nucypher.control.specifications.exceptions import InvalidInputData
 from nucypher.control.specifications.fields import StringList
-from nucypher.utilities.porter.control.specifications.fields import (
-    TreasureMapID,
-    UrsulaChecksumAddress,
-    WorkOrder,
-    WorkOrderResult
-)
-from tests.utils.policy import work_order_setup
+from nucypher.crypto.umbral_adapter import SecretKey, encrypt
+from nucypher.utilities.porter.control.specifications.fields import HRAC, UrsulaChecksumAddress
+from nucypher.utilities.porter.control.specifications.fields.retrieve import RetrievalKit
 
 
-def test_treasure_map_id_field(enacted_federated_policy):
-    treasure_map_id_hex = enacted_federated_policy.treasure_map.public_id()
-    other_hex = b"some date".hex()  # length is not 32-bytes
+def test_hrac_field(enacted_federated_policy):
+    hrac = enacted_federated_policy.treasure_map.hrac
 
-    field = TreasureMapID()
-    serialized = field._serialize(value=treasure_map_id_hex, attr=None, obj=None)
-    assert serialized == treasure_map_id_hex
-    assert serialized != other_hex
+    field = HRAC()
+    serialized = field._serialize(value=hrac, attr=None, obj=None)
+    assert serialized == bytes(hrac).hex()
 
     deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == treasure_map_id_hex
-    assert deserialized != other_hex
+    assert deserialized == hrac
 
-    field._validate(value=treasure_map_id_hex)
     with pytest.raises(InvalidInputData):
-        field._validate(value=other_hex)
+        field._deserialize(value=b'not hrac', attr=None, data=None)
 
 
 def test_ursula_checksum_address_field(get_random_checksum_address):
@@ -71,36 +67,6 @@ def test_ursula_checksum_address_field(get_random_checksum_address):
 
     with pytest.raises(InvalidInputData):
         field._deserialize(value="0xdeadbeef", attr=None, data=None)
-
-
-def test_work_order_field(enacted_federated_policy,
-                          federated_ursulas,
-                          federated_bob,
-                          federated_alice,
-                          get_random_checksum_address):
-    # Setup
-    ursula_address, work_order = work_order_setup(enacted_federated_policy,
-                                                  federated_ursulas,
-                                                  federated_bob,
-                                                  federated_alice)
-    reencrypt_result = b"cfrags and signatures"
-
-    # Test Work Order
-    work_order_bytes = work_order.payload()
-    field = WorkOrder()
-    serialized = field._serialize(value=work_order, attr=None, obj=None)
-    assert serialized == b64encode(work_order_bytes).decode()
-
-    deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == work_order_bytes
-
-    # Test Work Order Result
-    field = WorkOrderResult()
-    serialized = field._serialize(value=reencrypt_result, attr=None, obj=None)
-    assert serialized == b64encode(reencrypt_result).decode()
-
-    deserialized = field.deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == reencrypt_result
 
 
 def test_ursula_checksum_address_string_list_field(get_random_checksum_address):
@@ -135,3 +101,33 @@ def test_ursula_checksum_address_string_list_field(get_random_checksum_address):
 
     with pytest.raises(InvalidInputData):
         field._deserialize(value=f"{ursula_1},{ursula_2},{ursula_3},{ursula_4},0xdeadbeef", attr=None, data=None)
+
+
+def test_retrieval_kit_field(get_random_checksum_address):
+    field = RetrievalKit()
+
+    def run_tests_on_kit(kit: RetrievalKitClass):
+        serialized = field._serialize(value=kit, attr=None, obj=None)
+        assert serialized == b64encode(bytes(kit)).decode()
+
+        deserialized = field._deserialize(value=serialized, attr=None, data=None)
+        assert isinstance(deserialized, RetrievalKitClass)
+        assert deserialized.capsule == kit.capsule
+        assert deserialized.queried_addresses == kit.queried_addresses
+
+    # kit with list of ursulas
+    encrypting_key = SecretKey.random().public_key()
+    capsule, _ = encrypt(encrypting_key, b'testing retrieval kit with 2 ursulas')
+    ursulas = [get_random_checksum_address(), get_random_checksum_address()]
+    run_tests_on_kit(kit=RetrievalKitClass(capsule, ursulas))
+
+    # kit with no ursulas
+    encrypting_key = SecretKey.random().public_key()
+    capsule, _ = encrypt(encrypting_key, b'testing retrieval kit with no ursulas')
+    run_tests_on_kit(kit=RetrievalKitClass(capsule, []))
+
+    with pytest.raises(InvalidInputData):
+        field._deserialize(value=b"non_base_64_data", attr=None, data=None)
+
+    with pytest.raises(InvalidInputData):
+        field._deserialize(value=b64encode(b"invalid_retrieval_kit_bytes").decode(), attr=None, data=None)

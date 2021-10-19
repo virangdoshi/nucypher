@@ -17,18 +17,17 @@
 from typing import List, Optional
 
 from eth_typing import ChecksumAddress
-from nucypher.crypto.umbral_adapter import PublicKey
 
-from nucypher.characters.control.specifications.fields import TreasureMap
+from nucypher.core import TreasureMap, RetrievalKit
+
 from nucypher.control.interfaces import ControlInterface, attach_schema
+from nucypher.crypto.umbral_adapter import PublicKey
 from nucypher.utilities.porter.control.specifications import porter_schema
 
 
 class PorterInterface(ControlInterface):
     def __init__(self, porter: 'Porter' = None, *args, **kwargs):
         super().__init__(implementer=porter, *args, **kwargs)
-        # set federated/non-federated context for publish treasure map schema
-        PorterInterface.publish_treasure_map._schema.context[TreasureMap.IS_FEDERATED_CONTEXT_KEY] = porter.federated_only
 
     #
     # Alice Endpoints
@@ -44,19 +43,7 @@ class PorterInterface(ControlInterface):
                                                     exclude_ursulas=exclude_ursulas,
                                                     include_ursulas=include_ursulas)
 
-        response_data = {
-            "ursulas": ursulas_info
-        }
-        return response_data
-
-    @attach_schema(porter_schema.AlicePublishTreasureMap)
-    def publish_treasure_map(self,
-                             treasure_map: bytes,
-                             bob_encrypting_key: bytes) -> dict:
-        bob_enc_key = PublicKey.from_bytes(bob_encrypting_key)
-        self.implementer.publish_treasure_map(treasure_map_bytes=treasure_map,
-                                              bob_encrypting_key=bob_enc_key)
-        response_data = {'published': True}  # always True - if publish failed, an exception is raised by implementer
+        response_data = {"ursulas": ursulas_info}
         return response_data
 
     @attach_schema(porter_schema.AliceRevoke)
@@ -67,24 +54,19 @@ class PorterInterface(ControlInterface):
         # 3. create response
         pass
 
-    #
-    # Bob Endpoints
-    #
-    @attach_schema(porter_schema.BobGetTreasureMap)
-    def get_treasure_map(self,
-                         treasure_map_id: str,
-                         bob_encrypting_key: bytes) -> dict:
-        bob_enc_key = PublicKey.from_bytes(bob_encrypting_key)
-        treasure_map = self.implementer.get_treasure_map(map_identifier=treasure_map_id,
-                                                         bob_encrypting_key=bob_enc_key)
-        response_data = {'treasure_map': treasure_map}
-        return response_data
-
-    @attach_schema(porter_schema.BobExecWorkOrder)
-    def exec_work_order(self,
-                        ursula: ChecksumAddress,
-                        work_order_payload: bytes) -> dict:
-        work_order_result = self.implementer.exec_work_order(ursula_address=ursula,
-                                                             work_order_payload=work_order_payload)
-        response_data = {'work_order_result': work_order_result}
+    @attach_schema(porter_schema.BobRetrieveCFrags)
+    def retrieve_cfrags(self,
+                        treasure_map: TreasureMap,
+                        retrieval_kits: List[RetrievalKit],
+                        alice_verifying_key: PublicKey,
+                        bob_encrypting_key: PublicKey,
+                        bob_verifying_key: PublicKey,
+                        ) -> dict:
+        retrieval_results = self.implementer.retrieve_cfrags(treasure_map=treasure_map,
+                                                             retrieval_kits=retrieval_kits,
+                                                             alice_verifying_key=alice_verifying_key,
+                                                             bob_encrypting_key=bob_encrypting_key,
+                                                             bob_verifying_key=bob_verifying_key)
+        results = retrieval_results   # list of RetrievalResult objects
+        response_data = {'retrieval_results': results}
         return response_data

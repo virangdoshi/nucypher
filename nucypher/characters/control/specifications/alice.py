@@ -42,12 +42,12 @@ class PolicyBaseSchema(BaseSchema):
             '-bvk',
             help="Bob's verifying key as a hexadecimal string",
             type=click.STRING, required=False))
-    m = character_fields.M(
+    threshold = base_fields.PositiveInteger(
         required=True, load_only=True,
-        click=options.option_m)
-    n = character_fields.N(
+        click=options.option_threshold)
+    shares = base_fields.PositiveInteger(
         required=True, load_only=True,
-        click=options.option_n)
+        click=options.option_shares)
     expiration = character_fields.DateTime(
         required=True, load_only=True,
         click=click.option(
@@ -73,8 +73,8 @@ class PolicyBaseSchema(BaseSchema):
     @validates_schema
     def check_valid_n_and_m(self, data, **kwargs):
         # ensure that n is greater than or equal to m
-        if not (0 < data['m'] <= data['n']):
-            raise InvalidArgumentCombo(f"N and M must satisfy 0 < M ≤ N")
+        if not (0 < data['threshold'] <= data['shares']):
+            raise InvalidArgumentCombo(f"`shares` and `threshold` must satisfy 0 < threshold ≤ shares")
 
     @validates_schema
     def check_rate_or_value_not_both(self, data, **kwargs):
@@ -102,7 +102,7 @@ class GrantPolicy(PolicyBaseSchema):
 
     # output fields
     # treasure map only used for serialization so no need to provide federated/non-federated context
-    treasure_map = character_fields.TreasureMap(dump_only=True)
+    treasure_map = character_fields.EncryptedTreasureMap(dump_only=True)
 
     alice_verifying_key = character_fields.Key(dump_only=True)
 
@@ -138,7 +138,7 @@ class Decrypt(BaseSchema):
     label = character_fields.Label(
         required=True, load_only=True,
         click=options.option_label(required=True))
-    message_kit = character_fields.UmbralMessageKit(
+    message_kit = character_fields.MessageKit(
         load_only=True,
         click=options.option_message_kit(required=True))
 

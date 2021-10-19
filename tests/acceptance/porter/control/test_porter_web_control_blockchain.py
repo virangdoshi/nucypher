@@ -16,18 +16,18 @@
 """
 
 import json
-from urllib.parse import urlencode
+import os
 from base64 import b64encode
+from urllib.parse import urlencode
 
-import pytest
-from nucypher.crypto.umbral_adapter import PublicKey
+from nucypher.core import RetrievalKit
 
-from nucypher.crypto.constants import HRAC_LENGTH
+from nucypher.characters.lawful import Enrico
 from nucypher.crypto.powers import DecryptingPower
-from nucypher.network.nodes import Learner
-from nucypher.policy.maps import TreasureMap
+from nucypher.policy.kits import PolicyMessageKit, RetrievalResult
+from nucypher.utilities.porter.control.specifications.fields import RetrievalResultSchema, RetrievalKit as RetrievalKitField
 from tests.utils.middleware import MockRestMiddleware
-from tests.utils.policy import work_order_setup
+from tests.utils.policy import retrieval_request_setup, retrieval_params_decode_from_rest
 
 
 def test_get_ursulas(blockchain_porter_web_controller, blockchain_ursulas):
@@ -86,114 +86,113 @@ def test_get_ursulas(blockchain_porter_web_controller, blockchain_ursulas):
     #
     failed_ursula_params = dict(get_ursulas_params)
     failed_ursula_params['quantity'] = len(blockchain_ursulas_list) + 1  # too many to get
-    with pytest.raises(Learner.NotEnoughNodes):
-        blockchain_porter_web_controller.get('/get_ursulas', data=json.dumps(failed_ursula_params))
+    response = blockchain_porter_web_controller.get('/get_ursulas', data=json.dumps(failed_ursula_params))
+    assert response.status_code == 500
 
 
-def test_publish_and_get_treasure_map(blockchain_porter_web_controller,
-                                      blockchain_alice,
-                                      blockchain_bob,
-                                      idle_blockchain_policy):
-    # Send bad data to assert error return
-    response = blockchain_porter_web_controller.get('/get_treasure_map', data=json.dumps({'bad': 'input'}))
-    assert response.status_code == 400
-
-    response = blockchain_porter_web_controller.post('/publish_treasure_map', data=json.dumps({'bad': 'input'}))
-    assert response.status_code == 400
-
-    # ensure that random treasure map cannot be obtained since not available
-    with pytest.raises(TreasureMap.NowhereToBeFound):
-        random_bob_encrypting_key = PublicKey.from_bytes(
-            bytes.fromhex("026d1f4ce5b2474e0dae499d6737a8d987ed3c9ab1a55e00f57ad2d8e81fe9e9ac"))
-        random_treasure_map_id = "93a9482bdf3b4f2e9df906a35144ca84"
-        assert len(bytes.fromhex(random_treasure_map_id)) == HRAC_LENGTH  # non-federated is 16 bytes
-        get_treasure_map_params = {
-            'treasure_map_id': random_treasure_map_id,
-            'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-        }
-        blockchain_porter_web_controller.get('/get_treasure_map',
-                                             data=json.dumps(get_treasure_map_params))
-
-    blockchain_bob_encrypting_key = blockchain_bob.public_keys(DecryptingPower)
-    # try publishing a new policy
-    network_middleware = MockRestMiddleware()
-    enacted_policy = idle_blockchain_policy.enact(network_middleware=network_middleware,
-                                                  publish_treasure_map=False)  # enact but don't publish
-    treasure_map = enacted_policy.treasure_map
-    publish_treasure_map_params = {
-        'treasure_map': b64encode(bytes(treasure_map)).decode(),
-        'bob_encrypting_key': bytes(blockchain_bob_encrypting_key).hex()
-    }
-    # this query string is long (~6840 characters), but still seems to work ...
-    # json data payload is tested in federated tests
-    response = blockchain_porter_web_controller.post(f'/publish_treasure_map'
-                                                     f'?{urlencode(publish_treasure_map_params)}')
-
-    assert response.status_code == 200
-    response_data = json.loads(response.data)
-    assert response_data['result']['published']
-
-    # try getting the recently published treasure map
-    map_id = blockchain_bob.construct_map_id(blockchain_alice.stamp,
-                                             enacted_policy.label)
-    get_treasure_map_params = {
-        'treasure_map_id': map_id,
-        'bob_encrypting_key': bytes(blockchain_bob_encrypting_key).hex()
-    }
-    response = blockchain_porter_web_controller.get('/get_treasure_map',
-                                                    data=json.dumps(get_treasure_map_params))
-    assert response.status_code == 200
-    response_data = json.loads(response.data)
-    assert response_data['result']['treasure_map'] == b64encode(bytes(treasure_map)).decode()
-
-    # try getting recently published treasure map using query parameters
-    response = blockchain_porter_web_controller.get(f'/get_treasure_map'
-                                                    f'?{urlencode(get_treasure_map_params)}')
-    assert response.status_code == 200
-    response_data = json.loads(response.data)
-    assert response_data['result']['treasure_map'] == b64encode(bytes(treasure_map)).decode()
-
-
-def test_exec_work_order(blockchain_porter_web_controller,
+def test_retrieve_cfrags(blockchain_porter,
+                         blockchain_porter_web_controller,
                          random_blockchain_policy,
-                         blockchain_ursulas,
                          blockchain_bob,
-                         blockchain_alice,
-                         get_random_checksum_address):
+                         blockchain_alice):
     # Send bad data to assert error return
-    response = blockchain_porter_web_controller.post('/exec_work_order', data=json.dumps({'bad': 'input'}))
+    response = blockchain_porter_web_controller.post('/retrieve_cfrags', data=json.dumps({'bad': 'input'}))
     assert response.status_code == 400
 
     # Setup
     network_middleware = MockRestMiddleware()
     # enact new random policy since idle_blockchain_policy/enacted_blockchain_policy already modified in previous tests
-    enacted_policy = random_blockchain_policy.enact(network_middleware=network_middleware,
-                                                    publish_treasure_map=False)  # enact but don't publish
-    ursula_address, work_order = work_order_setup(enacted_policy,
-                                                  blockchain_ursulas,
-                                                  blockchain_bob,
-                                                  blockchain_alice)
-    work_order_payload_b64 = b64encode(work_order.payload()).decode()
+    enacted_policy = random_blockchain_policy.enact(network_middleware=network_middleware)
 
-    exec_work_order_params = {
-        'ursula': ursula_address,
-        'work_order_payload': work_order_payload_b64
-    }
-    response = blockchain_porter_web_controller.post(f'/exec_work_order'
-                                                     f'?{urlencode(exec_work_order_params)}')
+    original_message = b"Those who say it can't be done are usually interrupted by others doing it."  # - James Baldwin
+    retrieve_cfrags_params, message_kit = retrieval_request_setup(enacted_policy,
+                                                                  blockchain_bob,
+                                                                  blockchain_alice,
+                                                                  original_message=original_message,
+                                                                  encode_for_rest=True)
+
+    #
+    # Success
+    #
+    response = blockchain_porter_web_controller.post('/retrieve_cfrags', data=json.dumps(retrieve_cfrags_params))
     assert response.status_code == 200
 
     response_data = json.loads(response.data)
-    work_order_result = response_data['result']['work_order_result']
-    assert work_order_result
+    retrieval_results = response_data['result']['retrieval_results']
+    assert retrieval_results
 
+    # expected results - can only compare length of results, ursulas are randomized to obtain cfrags
+    retrieve_args = retrieval_params_decode_from_rest(retrieve_cfrags_params)
+    expected_results = blockchain_porter.retrieve_cfrags(**retrieve_args)
+    assert len(retrieval_results) == len(expected_results)
+
+    # check that the re-encryption performed was valid
+    treasure_map = retrieve_args['treasure_map']
+    policy_message_kit = PolicyMessageKit.from_message_kit(message_kit=message_kit,
+                                                           policy_key=enacted_policy.public_key,
+                                                           threshold=treasure_map.threshold)
+    assert len(retrieval_results) == 1
+    field = RetrievalResultSchema()
+    cfrags = field.load(retrieval_results[0])['cfrags']
+    verified_cfrags = {}
+    for ursula, cfrag in cfrags.items():
+        # need to obtain verified cfrags (verified cfrags are not deserializable, only non-verified cfrags)
+        verified_cfrag = cfrag.verify(capsule=policy_message_kit.message_kit.capsule,
+                                      verifying_pk=blockchain_alice.stamp.as_umbral_pubkey(),
+                                      delegating_pk=enacted_policy.public_key,
+                                      receiving_pk=blockchain_bob.public_keys(DecryptingPower))
+        verified_cfrags[ursula] = verified_cfrag
+    retrieval_result_object = RetrievalResult(cfrags=verified_cfrags)
+    policy_message_kit = policy_message_kit.with_result(retrieval_result_object)
+
+    assert policy_message_kit.is_decryptable_by_receiver()
+
+    cleartext = blockchain_bob._crypto_power.power_ups(DecryptingPower).keypair.decrypt(policy_message_kit)
+    assert cleartext == original_message
+
+    #
+    # Try using multiple retrieval kits
+    #
+    multiple_retrieval_kits_params = dict(retrieve_cfrags_params)
+    enrico = Enrico(policy_encrypting_key=enacted_policy.public_key)
+    retrieval_kit_1 = RetrievalKit.from_message_kit(enrico.encrypt_message(b"Those who say it can't be done"))
+    retrieval_kit_2 = RetrievalKit.from_message_kit(enrico.encrypt_message(b"are usually interrupted by others doing it."))
+    retrieval_kit_field = RetrievalKitField()
+    # use multiple retrieval kits and serialize for json
+    multiple_retrieval_kits_params['retrieval_kits'] = [
+        retrieval_kit_field._serialize(value=retrieval_kit_1, attr=None, obj=None),
+        retrieval_kit_field._serialize(value=retrieval_kit_2, attr=None, obj=None)
+    ]
+    response = blockchain_porter_web_controller.post('/retrieve_cfrags', data=json.dumps(multiple_retrieval_kits_params))
+    assert response.status_code == 200
+
+    response_data = json.loads(response.data)
+    retrieval_results = response_data['result']['retrieval_results']
+    assert retrieval_results
+    assert len(retrieval_results) == 2
+
+    #
+    # Try same retrieval (with multiple retrieval kits) using query parameters
+    #
+    url_retrieve_params = dict(multiple_retrieval_kits_params)  # use multiple kit params from above
+    # adjust parameter for url query parameter list format
+    url_retrieve_params['retrieval_kits'] = ",".join(url_retrieve_params['retrieval_kits'])   # adjust for list
+    response = blockchain_porter_web_controller.post(f'/retrieve_cfrags'
+                                                     f'?{urlencode(url_retrieve_params)}')
+    assert response.status_code == 200
+    response_data = json.loads(response.data)
+    retrieval_results = response_data['result']['retrieval_results']
+    assert retrieval_results
+    assert len(retrieval_results) == 2
+
+    #
     # Failure
-    exec_work_order_params = {
-        'ursula': get_random_checksum_address(),  # unknown ursula
-        'work_order_payload': work_order_payload_b64
-    }
-    with pytest.raises(Learner.NotEnoughNodes):
-        blockchain_porter_web_controller.post('/exec_work_order', data=json.dumps(exec_work_order_params))
+    #
+    failure_retrieve_cfrags_params = dict(retrieve_cfrags_params)
+    # use invalid treasure map bytes
+    failure_retrieve_cfrags_params['treasure_map'] = b64encode(os.urandom(32)).decode()
+    response = blockchain_porter_web_controller.post('/retrieve_cfrags', data=json.dumps(failure_retrieve_cfrags_params))
+    assert response.status_code == 400  # invalid treasure map provided
 
 
 def test_get_ursulas_basic_auth(blockchain_porter_basic_auth_web_controller):

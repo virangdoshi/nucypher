@@ -21,35 +21,39 @@ import datetime
 import maya
 import pytest
 
+from nucypher.core import MessageKit, RevocationOrder
+
 from nucypher.characters.lawful import Enrico
 from nucypher.crypto.utils import keccak_digest
-from nucypher.policy.orders import Revocation
 
 
 def test_federated_grant(federated_alice, federated_bob, federated_ursulas):
     # Setup the policy details
-    m, n = 2, 3
+    threshold, shares = 2, 3
     policy_end_datetime = maya.now() + datetime.timedelta(days=5)
     label = b"this_is_the_path_to_which_access_is_being_granted"
 
     # Create the Policy, granting access to Bob
-    policy = federated_alice.grant(federated_bob, label, m=m, n=n, expiration=policy_end_datetime)
-
-    # Check the policy ID
-    policy_id = keccak_digest(policy.label + bytes(federated_bob.stamp))
-    assert policy_id == policy.id
+    policy = federated_alice.grant(federated_bob, label, threshold=threshold, shares=shares, expiration=policy_end_datetime)
 
     # Check Alice's active policies
-    assert policy_id in federated_alice.active_policies
-    assert federated_alice.active_policies[policy_id] == policy
+    assert policy.hrac in federated_alice.active_policies
+    assert federated_alice.active_policies[policy.hrac] == policy
 
-    # The number of actually enacted arrangements is exactly equal to n.
-    assert len(policy.treasure_map.destinations) == n
+    treasure_map = federated_bob._decrypt_treasure_map(policy.treasure_map,
+                                                       policy.publisher_verifying_key)
+
+    # The number of actually enacted arrangements is exactly equal to shares.
+    assert len(treasure_map.destinations) == shares
 
     # Let's look at the enacted arrangements.
     for ursula in federated_ursulas:
-        if ursula.checksum_address in policy.treasure_map.destinations:
-            assert ursula.checksum_address in policy.treasure_map.destinations
+        if ursula.checksum_address in treasure_map.destinations:
+            kfrag_kit = treasure_map.destinations[ursula.checksum_address]
+
+            # TODO: try to decrypt?
+            # TODO: Use a new type for EncryptedKFrags?
+            assert isinstance(kfrag_kit, MessageKit)
 
 
 def test_federated_alice_can_decrypt(federated_alice, federated_bob):
@@ -59,15 +63,15 @@ def test_federated_alice_can_decrypt(federated_alice, federated_bob):
     """
 
     # Setup the policy details
-    m, n = 2, 3
+    threshold, shares = 2, 3
     policy_end_datetime = maya.now() + datetime.timedelta(days=5)
     label = b"this_is_the_path_to_which_access_is_being_granted"
 
     policy = federated_alice.create_policy(
         bob=federated_bob,
         label=label,
-        m=m,
-        n=n,
+        threshold=threshold,
+        shares=shares,
         expiration=policy_end_datetime,
     )
 
@@ -78,28 +82,25 @@ def test_federated_alice_can_decrypt(federated_alice, federated_bob):
     plaintext = b"this is the first thing i'm encrypting ever."
 
     # use the enrico to encrypt the message
-    message_kit, signature = enrico.encrypt_message(plaintext)
+    message_kit = enrico.encrypt_message(plaintext)
 
     # decrypt the data
-    decrypted_data = federated_alice.verify_from(
-        enrico,
-        message_kit,
-        signature=signature,
-        decrypt=True,
-        label=policy.label
+    decrypted_data = federated_alice.decrypt_message_kit(
+        label=policy.label,
+        message_kit=message_kit,
     )
 
-    assert plaintext == decrypted_data
+    assert [plaintext] == decrypted_data
 
 
 @pytest.mark.skip("Needs rework post-TMcKF")  # TODO
 @pytest.mark.usefixtures('federated_ursulas')
 def test_revocation(federated_alice, federated_bob):
-    m, n = 2, 3
+    threshold, shares = 2, 3
     policy_end_datetime = maya.now() + datetime.timedelta(days=5)
     label = b"revocation test"
 
-    policy = federated_alice.grant(federated_bob, label, m=m, n=n, expiration=policy_end_datetime)
+    policy = federated_alice.grant(federated_bob, label, threshold=threshold, shares=shares, expiration=policy_end_datetime)
 
     for node_id, encrypted_kfrag in policy.treasure_map:
         assert policy.revocation_kit[node_id]
@@ -111,7 +112,7 @@ def test_revocation(federated_alice, federated_bob):
     # Test Revocation deserialization
     revocation = policy.revocation_kit[node_id]
     revocation_bytes = bytes(revocation)
-    deserialized_revocation = Revocation.from_bytes(revocation_bytes)
+    deserialized_revocation = RevocationOrder.from_bytes(revocation_bytes)
     assert deserialized_revocation == revocation
 
     # Attempt to revoke the new policy

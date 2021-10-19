@@ -14,21 +14,15 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
-from base64 import b64encode, b64decode
+import os
+from base64 import b64encode
 
 import pytest
-from nucypher.crypto.umbral_adapter import PublicKey
 
-from nucypher.crypto.constants import HRAC_LENGTH
-from nucypher.crypto.powers import DecryptingPower
+from nucypher.control.specifications.exceptions import InvalidInputData
 from nucypher.network.nodes import Learner
-from nucypher.policy.maps import TreasureMap
 from tests.utils.middleware import MockRestMiddleware
-
-
-# should always be first test due to checks on response id
-from tests.utils.policy import work_order_setup
+from tests.utils.policy import retrieval_request_setup, retrieval_params_decode_from_rest
 
 
 def test_get_ursulas(blockchain_porter_rpc_controller, blockchain_ursulas):
@@ -81,83 +75,38 @@ def test_get_ursulas(blockchain_porter_rpc_controller, blockchain_ursulas):
         blockchain_porter_rpc_controller.send(request_data)
 
 
-def test_publish_and_get_treasure_map(blockchain_porter_rpc_controller,
-                                      blockchain_alice,
-                                      blockchain_bob,
-                                      idle_blockchain_policy):
-    # ensure that random treasure map cannot be obtained since not available
-    with pytest.raises(TreasureMap.NowhereToBeFound):
-        random_bob_encrypting_key = PublicKey.from_bytes(
-            bytes.fromhex("026d1f4ce5b2474e0dae499d6737a8d987ed3c9ab1a55e00f57ad2d8e81fe9e9ac"))
-        random_treasure_map_id = "93a9482bdf3b4f2e9df906a35144ca84"
-        assert len(bytes.fromhex(random_treasure_map_id)) == HRAC_LENGTH  # non-federated is 16 bytes
-        get_treasure_map_params = {
-            'treasure_map_id': random_treasure_map_id,
-            'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-        }
-        request_data = {'method': 'get_treasure_map', 'params': get_treasure_map_params}
-        blockchain_porter_rpc_controller.send(request_data)
-
-    blockchain_bob_encrypting_key = blockchain_bob.public_keys(DecryptingPower)
-    # try publishing a new policy
-    network_middleware = MockRestMiddleware()
-    enacted_policy = idle_blockchain_policy.enact(network_middleware=network_middleware,
-                                                  publish_treasure_map=False)  # enact but don't publish
-    treasure_map = enacted_policy.treasure_map
-    publish_treasure_map_params = {
-        'treasure_map': b64encode(bytes(treasure_map)).decode(),
-        'bob_encrypting_key': bytes(blockchain_bob_encrypting_key).hex()
-    }
-    request_data = {'method': 'publish_treasure_map', 'params': publish_treasure_map_params}
-    response = blockchain_porter_rpc_controller.send(request_data)
-    assert response.success
-
-    # try getting the recently published treasure map
-    map_id = blockchain_bob.construct_map_id(blockchain_alice.stamp,
-                                             enacted_policy.label)
-    get_treasure_map_params = {
-        'treasure_map_id': map_id,
-        'bob_encrypting_key': bytes(blockchain_bob_encrypting_key).hex()
-    }
-    request_data = {'method': 'get_treasure_map', 'params': get_treasure_map_params}
-    response = blockchain_porter_rpc_controller.send(request_data)
-    assert response.success
-    assert response.content['treasure_map'] == b64encode(bytes(treasure_map)).decode()
-
-
-def test_exec_work_order(blockchain_porter_rpc_controller,
+def test_retrieve_cfrags(blockchain_porter,
+                         blockchain_porter_rpc_controller,
                          random_blockchain_policy,
-                         blockchain_ursulas,
                          blockchain_bob,
-                         blockchain_alice,
-                         get_random_checksum_address):
-    method = 'exec_work_order'
+                         blockchain_alice):
+    method = 'retrieve_cfrags'
+
     # Setup
     network_middleware = MockRestMiddleware()
     # enact new random policy since idle_blockchain_policy/enacted_blockchain_policy already modified in previous tests
-    enacted_policy = random_blockchain_policy.enact(network_middleware=network_middleware,
-                                                    publish_treasure_map=False)  # enact but don't publish
-    ursula_address, work_order = work_order_setup(enacted_policy,
-                                                  blockchain_ursulas,
-                                                  blockchain_bob,
-                                                  blockchain_alice)
-    work_order_payload_b64 = b64encode(work_order.payload()).decode()
+    enacted_policy = random_blockchain_policy.enact(network_middleware=network_middleware)
+    retrieve_cfrags_params, _ = retrieval_request_setup(enacted_policy,
+                                                        blockchain_bob,
+                                                        blockchain_alice,
+                                                        encode_for_rest=True)
 
-    exec_work_order_params = {
-        'ursula': ursula_address,
-        'work_order_payload': work_order_payload_b64
-    }
-    request_data = {'method': method, 'params': exec_work_order_params}
+    # Success
+    request_data = {'method': method, 'params': retrieve_cfrags_params}
     response = blockchain_porter_rpc_controller.send(request_data)
     assert response.success
-    work_order_result = response.content['work_order_result']
-    assert work_order_result
 
-    # Failure
-    exec_work_order_params = {
-        'ursula': get_random_checksum_address(),  # unknown ursula
-        'work_order_payload': work_order_payload_b64
-    }
-    with pytest.raises(Learner.NotEnoughNodes):
-        request_data = {'method': method, 'params': exec_work_order_params}
+    retrieval_results = response.data['result']['retrieval_results']
+    assert retrieval_results
+
+    # expected results - can only compare length of results, ursulas are randomized to obtain cfrags
+    retrieve_args = retrieval_params_decode_from_rest(retrieve_cfrags_params)
+    expected_results = blockchain_porter.retrieve_cfrags(**retrieve_args)
+    assert len(retrieval_results) == len(expected_results)
+
+    # Failure - use encrypted treasure map
+    failure_retrieve_cfrags_params = dict(retrieve_cfrags_params)
+    failure_retrieve_cfrags_params['treasure_map'] = b64encode(os.urandom(32)).decode()
+    request_data = {'method': method, 'params': failure_retrieve_cfrags_params}
+    with pytest.raises(InvalidInputData):
         blockchain_porter_rpc_controller.send(request_data)

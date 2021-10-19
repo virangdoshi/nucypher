@@ -14,16 +14,18 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-import click
-from marshmallow import validates_schema
-from marshmallow import fields as marshmallow_fields
 
-from nucypher.control.specifications.base import BaseSchema
-from nucypher.control.specifications import fields as base_fields
-from nucypher.control.specifications.exceptions import InvalidArgumentCombo
-from nucypher.utilities.porter.control.specifications import fields
+
+import click
+from marshmallow import fields as marshmallow_fields
+from marshmallow import validates_schema
+
 from nucypher.characters.control.specifications import fields as character_fields
 from nucypher.cli import types
+from nucypher.control.specifications import fields as base_fields
+from nucypher.control.specifications.base import BaseSchema
+from nucypher.control.specifications.exceptions import InvalidArgumentCombo
+from nucypher.utilities.porter.control.specifications import fields
 
 
 def option_ursula():
@@ -113,25 +115,6 @@ class AliceGetUrsulas(BaseSchema):
                                        f"common entries {common_ursulas}")
 
 
-class AlicePublishTreasureMap(BaseSchema):
-    treasure_map = character_fields.TreasureMap(
-        required=True,
-        load_only=True,
-        click=click.option(
-            '--treasure-map',
-            '-t',
-            help="Treasure Map to publish",
-            type=click.STRING,
-            required=True))
-    bob_encrypting_key = character_fields.Key(
-        required=True,
-        load_only=True,
-        click=option_bob_encrypting_key())
-
-    # output
-    published = marshmallow_fields.Bool(dump_only=True)
-
-
 class AliceRevoke(BaseSchema):
     pass  # TODO need to understand revoke process better
 
@@ -139,39 +122,50 @@ class AliceRevoke(BaseSchema):
 #
 # Bob Endpoints
 #
-class BobGetTreasureMap(BaseSchema):
-    treasure_map_id = fields.TreasureMapID(
+class BobRetrieveCFrags(BaseSchema):
+    treasure_map = character_fields.TreasureMap(
         required=True,
         load_only=True,
         click=click.option(
-            '--treasure-map-id',
-            '-tid',
-            help="Treasure Map ID as hex",
+            '--treasure-map',
+            '-t',
+            help="Unencrypted Treasure Map for retrieval",
+            type=click.STRING,
+            required=True))
+    retrieval_kits = base_fields.StringList(
+        fields.RetrievalKit(),
+        click=click.option(
+            '--retrieval-kits',
+            '-r',
+            help="Retrieval kits for reencryption",
+            multiple=True,
+            type=click.STRING,
+            required=True,
+            default=[]),
+        required=True,
+        load_only=True)
+    alice_verifying_key = character_fields.Key(
+        required=True,
+        load_only=True,
+        click=click.option(
+            '--alice-verifying-key',
+            '-avk',
+            help="Alice's verifying key as a hexadecimal string",
             type=click.STRING,
             required=True))
     bob_encrypting_key = character_fields.Key(
         required=True,
         load_only=True,
         click=option_bob_encrypting_key())
-
-    # output
-    # treasure map only used for serialization so no need to provide federated/non-federated context
-    treasure_map = character_fields.TreasureMap(dump_only=True)
-
-
-class BobExecWorkOrder(BaseSchema):
-    ursula = fields.UrsulaChecksumAddress(
-        required=True,
-        load_only=True,
-        click=option_ursula())
-    work_order_payload = fields.WorkOrder(
+    bob_verifying_key = character_fields.Key(
         required=True,
         load_only=True,
         click=click.option(
-            '--work-order',
-            '-w',
-            help="Re-encryption work order",
-            type=click.STRING, required=True))
+            '--bob-verifying-key',
+            '-bvk',
+            help="Bob's verifying key as a hexadecimal string",
+            type=click.STRING,
+            required=True))
 
     # output
-    work_order_result = fields.WorkOrderResult(dump_only=True)
+    retrieval_results = marshmallow_fields.List(marshmallow_fields.Nested(fields.RetrievalResultSchema), dump_only=True)

@@ -15,16 +15,18 @@
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+
 import json
-from urllib.parse import urlencode
 from base64 import b64encode
+from urllib.parse import urlencode
 
-import pytest
+from nucypher.core import RetrievalKit
 
+from nucypher.characters.lawful import Enrico
 from nucypher.crypto.powers import DecryptingPower
-from nucypher.network.nodes import Learner
-from nucypher.policy.maps import TreasureMap
-from tests.utils.policy import work_order_setup
+from nucypher.policy.kits import PolicyMessageKit, RetrievalResult
+from nucypher.utilities.porter.control.specifications.fields import RetrievalResultSchema, RetrievalKit as RetrievalKitField
+from tests.utils.policy import retrieval_request_setup, retrieval_params_decode_from_rest
 
 
 def test_get_ursulas(federated_porter_web_controller, federated_ursulas):
@@ -82,116 +84,124 @@ def test_get_ursulas(federated_porter_web_controller, federated_ursulas):
     #
     failed_ursula_params = dict(get_ursulas_params)
     failed_ursula_params['quantity'] = len(federated_ursulas_list) + 1  # too many to get
-    with pytest.raises(Learner.NotEnoughNodes):
-        federated_porter_web_controller.get('/get_ursulas', data=json.dumps(failed_ursula_params))
+    response = federated_porter_web_controller.get('/get_ursulas', data=json.dumps(failed_ursula_params))
+    assert response.status_code == 500
 
 
-def test_publish_and_get_treasure_map(federated_porter_web_controller,
-                                      federated_alice,
-                                      federated_bob,
-                                      enacted_federated_policy,
-                                      random_federated_treasure_map_data):
-    # Send bad data to assert error return
-    response = federated_porter_web_controller.get('/get_treasure_map', data=json.dumps({'bad': 'input'}))
-    assert response.status_code == 400
-
-    response = federated_porter_web_controller.post('/publish_treasure_map', data=json.dumps({'bad': 'input'}))
-    assert response.status_code == 400
-
-    random_bob_encrypting_key, random_treasure_map_id, random_treasure_map = random_federated_treasure_map_data
-
-    # ensure that random treasure map cannot be obtained since not available
-    with pytest.raises(TreasureMap.NowhereToBeFound):
-        get_treasure_map_params = {
-            'treasure_map_id': random_treasure_map_id,
-            'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-        }
-        federated_porter_web_controller.get('/get_treasure_map', data=json.dumps(get_treasure_map_params))
-
-    # publish the random treasure map
-    publish_treasure_map_params = {
-        'treasure_map': b64encode(bytes(random_treasure_map)).decode(),
-        'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-    }
-    response = federated_porter_web_controller.post('/publish_treasure_map',
-                                                    data=json.dumps(publish_treasure_map_params))
-    assert response.status_code == 200
-    response_data = json.loads(response.data)
-    assert response_data['result']['published']
-
-    # try getting the random treasure map now
-    get_treasure_map_params = {
-        'treasure_map_id': random_treasure_map_id,
-        'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-    }
-    response = federated_porter_web_controller.get('/get_treasure_map',
-                                                   data=json.dumps(get_treasure_map_params))
-    assert response.status_code == 200
-    response_data = json.loads(response.data)
-    assert response_data['result']['treasure_map'] == b64encode(bytes(random_treasure_map)).decode()
-
-    # try getting random treasure map using query parameters
-    response = federated_porter_web_controller.get(f'/get_treasure_map'
-                                                   f'?{urlencode(get_treasure_map_params)}')
-    assert response.status_code == 200
-    response_data = json.loads(response.data)
-    assert response_data['result']['treasure_map'] == b64encode(bytes(random_treasure_map)).decode()
-
-    # try getting an already existing policy
-    map_id = federated_bob.construct_map_id(federated_alice.stamp,
-                                            enacted_federated_policy.label)
-    get_treasure_map_params = {
-        'treasure_map_id': map_id,
-        'bob_encrypting_key': bytes(federated_bob.public_keys(DecryptingPower)).hex()
-    }
-    response = federated_porter_web_controller.get('/get_treasure_map',
-                                                   data=json.dumps(get_treasure_map_params))
-    assert response.status_code == 200
-    response_data = json.loads(response.data)
-    assert response_data['result']['treasure_map'] == b64encode(bytes(enacted_federated_policy.treasure_map)).decode()
-
-
-def test_exec_work_order(federated_porter_web_controller,
+def test_retrieve_cfrags(federated_porter,
+                         federated_porter_web_controller,
                          enacted_federated_policy,
-                         federated_ursulas,
                          federated_bob,
                          federated_alice,
-                         get_random_checksum_address):
+                         random_federated_treasure_map_data):
     # Send bad data to assert error return
-    response = federated_porter_web_controller.post('/exec_work_order', data=json.dumps({'bad': 'input'}))
+    response = federated_porter_web_controller.post('/retrieve_cfrags', data=json.dumps({'bad': 'input'}))
     assert response.status_code == 400
 
     # Setup
-    ursula_address, work_order = work_order_setup(enacted_federated_policy,
-                                                  federated_ursulas,
-                                                  federated_bob,
-                                                  federated_alice)
-    work_order_payload_b64 = b64encode(work_order.payload()).decode()
+    original_message = b'The paradox of education is precisely this - that as one begins to become ' \
+                       b'conscious one begins to examine the society in which ' \
+                       b'he is (they are) being educated.'  # - James Baldwin
+    retrieve_cfrags_params, message_kit = retrieval_request_setup(enacted_federated_policy,
+                                                                  federated_bob,
+                                                                  federated_alice,
+                                                                  original_message=original_message,
+                                                                  encode_for_rest=True)
 
+    #
     # Success
-    exec_work_order_params = {
-        'ursula': ursula_address,
-        'work_order_payload': work_order_payload_b64
-    }
-    response = federated_porter_web_controller.post('/exec_work_order', data=json.dumps(exec_work_order_params))
+    #
+    response = federated_porter_web_controller.post('/retrieve_cfrags', data=json.dumps(retrieve_cfrags_params))
     assert response.status_code == 200
 
     response_data = json.loads(response.data)
-    work_order_result = response_data['result']['work_order_result']
-    assert work_order_result
+    retrieval_results = response_data['result']['retrieval_results']
+    assert retrieval_results
 
+    # expected results - can only compare length of results, ursulas are randomized to obtain cfrags
+    retrieve_args = retrieval_params_decode_from_rest(retrieve_cfrags_params)
+    expected_results = federated_porter.retrieve_cfrags(**retrieve_args)
+    assert len(retrieval_results) == len(expected_results)
+
+    # check that the re-encryption performed was valid
+    treasure_map = retrieve_args['treasure_map']
+    policy_message_kit = PolicyMessageKit.from_message_kit(message_kit=message_kit,
+                                                           policy_key=enacted_federated_policy.public_key,
+                                                           threshold=treasure_map.threshold)
+    assert len(retrieval_results) == 1
+    field = RetrievalResultSchema()
+    cfrags = field.load(retrieval_results[0])['cfrags']
+    verified_cfrags = {}
+    for ursula, cfrag in cfrags.items():
+        # need to obtain verified cfrags (verified cfrags are not deserializable, only non-verified cfrags)
+        verified_cfrag = cfrag.verify(capsule=policy_message_kit.message_kit.capsule,
+                                      verifying_pk=federated_alice.stamp.as_umbral_pubkey(),
+                                      delegating_pk=enacted_federated_policy.public_key,
+                                      receiving_pk=federated_bob.public_keys(DecryptingPower))
+        verified_cfrags[ursula] = verified_cfrag
+    retrieval_result_object = RetrievalResult(cfrags=verified_cfrags)
+    policy_message_kit = policy_message_kit.with_result(retrieval_result_object)
+
+    assert policy_message_kit.is_decryptable_by_receiver()
+
+    cleartext = federated_bob._crypto_power.power_ups(DecryptingPower).keypair.decrypt(policy_message_kit)
+    assert cleartext == original_message
+
+    #
+    # Try using multiple retrieval kits
+    #
+    multiple_retrieval_kits_params = dict(retrieve_cfrags_params)
+    enrico = Enrico(policy_encrypting_key=enacted_federated_policy.public_key)
+    retrieval_kit_1 = RetrievalKit.from_message_kit(enrico.encrypt_message(b'The paradox of education is precisely this'))
+    retrieval_kit_2 = RetrievalKit.from_message_kit(enrico.encrypt_message(b'that as one begins to become conscious'))
+    retrieval_kit_3 = RetrievalKit.from_message_kit(enrico.encrypt_message(b'begins to examine the society in which'))
+    retrieval_kit_4 = RetrievalKit.from_message_kit(enrico.encrypt_message(b'he is (they are) being educated.'))
+    retrieval_kit_field = RetrievalKitField()
+    # use multiple retrieval kits and serialize for json
+    multiple_retrieval_kits_params['retrieval_kits'] = [
+        retrieval_kit_field._serialize(value=retrieval_kit_1, attr=None, obj=None),
+        retrieval_kit_field._serialize(value=retrieval_kit_2, attr=None, obj=None),
+        retrieval_kit_field._serialize(value=retrieval_kit_3, attr=None, obj=None),
+        retrieval_kit_field._serialize(value=retrieval_kit_4, attr=None, obj=None)
+    ]
+    response = federated_porter_web_controller.post('/retrieve_cfrags', data=json.dumps(multiple_retrieval_kits_params))
+    assert response.status_code == 200
+
+    response_data = json.loads(response.data)
+    retrieval_results = response_data['result']['retrieval_results']
+    assert retrieval_results
+    assert len(retrieval_results) == 4
+
+    #
+    # Try same retrieval (with multiple retrieval kits) using query parameters
+    #
+    url_retrieve_params = dict(multiple_retrieval_kits_params)  # use multiple kit params from above
+    # adjust parameter for url query parameter list format
+    url_retrieve_params['retrieval_kits'] = ",".join(url_retrieve_params['retrieval_kits'])
+    response = federated_porter_web_controller.post(f'/retrieve_cfrags'
+                                                    f'?{urlencode(url_retrieve_params)}')
+    assert response.status_code == 200
+    response_data = json.loads(response.data)
+    retrieval_results = response_data['result']['retrieval_results']
+    assert retrieval_results
+    assert len(retrieval_results) == 4
+
+    #
     # Failure
-    exec_work_order_params = {
-        'ursula': get_random_checksum_address(),  # unknown ursula
-        'work_order_payload': work_order_payload_b64
-    }
-    with pytest.raises(Learner.NotEnoughNodes):
-        federated_porter_web_controller.post('/exec_work_order', data=json.dumps(exec_work_order_params))
+    #
+    failure_retrieve_cfrags_params = dict(retrieve_cfrags_params)
+    # use encrypted treasure map
+    _, random_treasure_map = random_federated_treasure_map_data
+    failure_retrieve_cfrags_params['treasure_map'] = b64encode(bytes(random_treasure_map)).decode()
+    response = federated_porter_web_controller.post('/retrieve_cfrags', data=json.dumps(failure_retrieve_cfrags_params))
+    assert response.status_code == 400  # invalid treasure map provided
 
 
 def test_endpoints_basic_auth(federated_porter_basic_auth_web_controller,
                               random_federated_treasure_map_data,
-                              get_random_checksum_address):
+                              enacted_federated_policy,
+                              federated_bob,
+                              federated_alice):
     # /get_ursulas
     quantity = 4
     duration = 2  # irrelevant for federated (but required)
@@ -202,33 +212,13 @@ def test_endpoints_basic_auth(federated_porter_basic_auth_web_controller,
     response = federated_porter_basic_auth_web_controller.get('/get_ursulas', data=json.dumps(get_ursulas_params))
     assert response.status_code == 401  # user unauthorized
 
-    random_bob_encrypting_key, random_treasure_map_id, random_treasure_map = random_federated_treasure_map_data
-
-    # /get_treasure_map
-    get_treasure_map_params = {
-        'treasure_map_id': random_treasure_map_id,
-        'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-    }
-    response = federated_porter_basic_auth_web_controller.get('/get_treasure_map',
-                                                              data=json.dumps(get_treasure_map_params))
-    assert response.status_code == 401  # user not authenticated
-
-    # /publish_treasure_map
-    publish_treasure_map_params = {
-        'treasure_map': b64encode(bytes(random_treasure_map)).decode(),
-        'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-    }
-    response = federated_porter_basic_auth_web_controller.post('/publish_treasure_map',
-                                                               data=json.dumps(publish_treasure_map_params))
-    assert response.status_code == 401  # user not authenticated
-
-    # /exec_work_order
-    exec_work_order_params = {
-        'ursula': get_random_checksum_address(),
-        'work_order_payload': b64encode(b"some data").decode()
-    }
-    response = federated_porter_basic_auth_web_controller.post('/exec_work_order',
-                                                               data=json.dumps(exec_work_order_params))
+    # /retrieve_cfrags
+    retrieve_cfrags_params, _ = retrieval_request_setup(enacted_federated_policy,
+                                                        federated_bob,
+                                                        federated_alice,
+                                                        encode_for_rest=True)
+    response = federated_porter_basic_auth_web_controller.post('/retrieve_cfrags',
+                                                               data=json.dumps(retrieve_cfrags_params))
     assert response.status_code == 401  # user not authenticated
 
     # try get_ursulas with authentication

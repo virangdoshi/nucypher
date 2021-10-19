@@ -15,23 +15,17 @@
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-from base64 import b64encode, b64decode
+from base64 import b64encode
 
 import pytest
-from nucypher.crypto.umbral_adapter import PublicKey
 
-from nucypher.crypto.powers import DecryptingPower
+from nucypher.control.specifications.exceptions import InvalidInputData
 from nucypher.network.nodes import Learner
-from nucypher.policy.maps import TreasureMap
-
-
-# should always be first test due to checks on response id
-from tests.utils.policy import work_order_setup
+from tests.utils.policy import retrieval_request_setup, retrieval_params_decode_from_rest
 
 
 def test_get_ursulas(federated_porter_rpc_controller, federated_ursulas):
     method = 'get_ursulas'
-    expected_response_id = 0
 
     quantity = 4
     duration = 2  # irrelevant for federated (but required)
@@ -51,9 +45,8 @@ def test_get_ursulas(federated_porter_rpc_controller, federated_ursulas):
     #
     request_data = {'method': method, 'params': get_ursulas_params}
     response = federated_porter_rpc_controller.send(request_data)
-    expected_response_id += 1
+    expected_response_id = response.id
     assert response.success
-    assert response.id == expected_response_id
     ursulas_info = response.data['result']['ursulas']
     returned_ursula_addresses = {ursula_info['checksum_address'] for ursula_info in ursulas_info}  # ensure no repeats
     assert len(returned_ursula_addresses) == quantity
@@ -79,84 +72,37 @@ def test_get_ursulas(federated_porter_rpc_controller, federated_ursulas):
         federated_porter_rpc_controller.send(request_data)
 
 
-def test_publish_and_get_treasure_map(federated_porter_rpc_controller,
-                                      federated_alice,
-                                      federated_bob,
-                                      enacted_federated_policy,
-                                      random_federated_treasure_map_data):
-    random_bob_encrypting_key, random_treasure_map_id, random_treasure_map = random_federated_treasure_map_data
-
-    # ensure that random treasure map cannot be obtained since not available
-    with pytest.raises(TreasureMap.NowhereToBeFound):
-        get_treasure_map_params = {
-            'treasure_map_id': random_treasure_map_id,
-            'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-        }
-        request_data = {'method': 'get_treasure_map', 'params': get_treasure_map_params}
-        federated_porter_rpc_controller.send(request_data)
-
-    # publish the random treasure map
-    publish_treasure_map_params = {
-        'treasure_map': b64encode(bytes(random_treasure_map)).decode(),
-        'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-    }
-    request_data = {'method': 'publish_treasure_map', 'params': publish_treasure_map_params}
-    response = federated_porter_rpc_controller.send(request_data)
-    assert response.success
-
-    # try getting the random treasure map now
-    get_treasure_map_params = {
-        'treasure_map_id': random_treasure_map_id,
-        'bob_encrypting_key': bytes(random_bob_encrypting_key).hex()
-    }
-    request_data = {'method': 'get_treasure_map', 'params': get_treasure_map_params}
-    response = federated_porter_rpc_controller.send(request_data)
-    assert response.success
-    assert response.content['treasure_map'] == b64encode(bytes(random_treasure_map)).decode()
-
-    # try getting an already existing policy
-    map_id = federated_bob.construct_map_id(federated_alice.stamp,
-                                            enacted_federated_policy.label)
-    get_treasure_map_params = {
-        'treasure_map_id': map_id,
-        'bob_encrypting_key': bytes(federated_bob.public_keys(DecryptingPower)).hex()
-    }
-    request_data = {'method': 'get_treasure_map', 'params': get_treasure_map_params}
-    response = federated_porter_rpc_controller.send(request_data)
-    assert response.success
-    assert response.content['treasure_map'] == b64encode(bytes(enacted_federated_policy.treasure_map)).decode()
-
-
-def test_exec_work_order(federated_porter_rpc_controller,
+def test_retrieve_cfrags(federated_porter,
+                         federated_porter_rpc_controller,
                          enacted_federated_policy,
-                         federated_ursulas,
                          federated_bob,
                          federated_alice,
-                         get_random_checksum_address):
-    method = 'exec_work_order'
+                         random_federated_treasure_map_data):
+    method = 'retrieve_cfrags'
+
     # Setup
-    ursula_address, work_order = work_order_setup(enacted_federated_policy,
-                                                  federated_ursulas,
-                                                  federated_bob,
-                                                  federated_alice)
+    retrieve_cfrags_params, _ = retrieval_request_setup(enacted_federated_policy,
+                                                        federated_bob,
+                                                        federated_alice,
+                                                        encode_for_rest=True)
 
-    work_order_payload_b64 = b64encode(work_order.payload()).decode()
-
-    exec_work_order_params = {
-        'ursula': ursula_address,
-        'work_order_payload': work_order_payload_b64
-    }
-    request_data = {'method': method, 'params': exec_work_order_params}
+    # Success
+    request_data = {'method': method, 'params': retrieve_cfrags_params}
     response = federated_porter_rpc_controller.send(request_data)
     assert response.success
-    work_order_result = response.content['work_order_result']
-    assert work_order_result
 
-    # Failure
-    exec_work_order_params = {
-        'ursula': get_random_checksum_address(),  # unknown ursula
-        'work_order_payload': work_order_payload_b64
-    }
-    with pytest.raises(Learner.NotEnoughNodes):
-        request_data = {'method': method, 'params': exec_work_order_params}
+    retrieval_results = response.data['result']['retrieval_results']
+    assert retrieval_results
+
+    # expected results - can only compare length of results, ursulas are randomized to obtain cfrags
+    retrieve_args = retrieval_params_decode_from_rest(retrieve_cfrags_params)
+    expected_results = federated_porter.retrieve_cfrags(**retrieve_args)
+    assert len(retrieval_results) == len(expected_results)
+
+    # Failure - use encrypted treasure map
+    failure_retrieve_cfrags_params = dict(retrieve_cfrags_params)
+    _, random_treasure_map = random_federated_treasure_map_data
+    failure_retrieve_cfrags_params['treasure_map'] = b64encode(bytes(random_treasure_map)).decode()
+    request_data = {'method': method, 'params': failure_retrieve_cfrags_params}
+    with pytest.raises(InvalidInputData):
         federated_porter_rpc_controller.send(request_data)

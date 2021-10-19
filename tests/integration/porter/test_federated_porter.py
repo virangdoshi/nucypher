@@ -14,14 +14,8 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-import os
-from base64 import b64decode
 
-import pytest
-from nucypher.crypto.powers import DecryptingPower
-from nucypher.crypto.umbral_adapter import PublicKey
-from nucypher.policy.maps import TreasureMap
-from tests.utils.policy import work_order_setup
+from tests.utils.policy import retrieval_request_setup
 
 
 def test_get_ursulas(federated_porter, federated_ursulas):
@@ -68,46 +62,15 @@ def test_get_ursulas(federated_porter, federated_ursulas):
         assert address not in returned_ursula_addresses
 
 
-def test_publish_and_get_treasure_map(federated_porter,
-                                      federated_alice,
-                                      federated_bob,
-                                      enacted_federated_policy,
-                                      random_federated_treasure_map_data):
-    random_bob_encrypting_key, random_treasure_map_id, random_treasure_map = random_federated_treasure_map_data
-
-    # ensure that random treasure map cannot be obtained since not available
-    with pytest.raises(TreasureMap.NowhereToBeFound):
-        federated_porter.get_treasure_map(map_identifier=random_treasure_map_id,
-                                          bob_encrypting_key=random_bob_encrypting_key)
-
-    # publish the random treasure map
-    federated_porter.publish_treasure_map(treasure_map_bytes=random_treasure_map,
-                                          bob_encrypting_key=random_bob_encrypting_key)
-
-    # try getting the random treasure map now
-    treasure_map = federated_porter.get_treasure_map(map_identifier=random_treasure_map_id,
-                                                     bob_encrypting_key=random_bob_encrypting_key)
-    assert treasure_map.public_id() == random_treasure_map_id
-
-    # try getting an already existing policy
-    map_id = federated_bob.construct_map_id(federated_alice.stamp,
-                                            enacted_federated_policy.label)
-    treasure_map = federated_porter.get_treasure_map(map_identifier=map_id,
-                                                     bob_encrypting_key=federated_bob.public_keys(DecryptingPower))
-    assert treasure_map == enacted_federated_policy.treasure_map
-
-
-def test_exec_work_order(federated_porter,
-                         federated_ursulas,
+def test_retrieve_cfrags(federated_porter,
                          federated_bob,
                          federated_alice,
                          enacted_federated_policy):
     # Setup
-    ursula_address, work_order = work_order_setup(enacted_federated_policy,
-                                                  federated_ursulas,
-                                                  federated_bob,
-                                                  federated_alice)
+    retrieval_args, _ = retrieval_request_setup(enacted_federated_policy,
+                                                federated_bob,
+                                                federated_alice)
 
-    result = federated_porter.exec_work_order(ursula_address=ursula_address,
-                                              work_order_payload=work_order.payload())
+    result = federated_porter.retrieve_cfrags(**retrieval_args)
+
     assert result, "valid result returned"

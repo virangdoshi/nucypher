@@ -29,11 +29,12 @@ import pytest
 from twisted.internet import threads
 from web3 import Web3
 
+from nucypher.core import MessageKit, EncryptedTreasureMap
+
 from nucypher.cli.main import nucypher_cli
 from nucypher.config.characters import AliceConfiguration, BobConfiguration
 from nucypher.config.constants import NUCYPHER_ENVVAR_KEYSTORE_PASSWORD, TEMPORARY_DOMAIN, \
     NUCYPHER_ENVVAR_ALICE_ETH_PASSWORD, NUCYPHER_ENVVAR_BOB_ETH_PASSWORD
-from nucypher.crypto.kits import UmbralMessageKit
 from nucypher.utilities.logging import GlobalLoggerSettings
 from tests.constants import INSECURE_DEVELOPMENT_PASSWORD, TEST_PROVIDER_URI
 
@@ -53,13 +54,14 @@ class MockSideChannel:
     def __init__(self):
         self.__message_kits = []
         self.__policies = []
+        self.__treasure_map = []
         self.__alice_public_keys = []
         self.__bob_public_keys = []
 
     def save_message_kit(self, message_kit: str) -> None:
         self.__message_kits.append(message_kit)
 
-    def fetch_message_kit(self) -> UmbralMessageKit:
+    def fetch_message_kit(self) -> MessageKit:
         if self.__message_kits:
             message_kit = self.__message_kits.pop()
             return message_kit
@@ -87,6 +89,13 @@ class MockSideChannel:
     def fetch_bob_public_keys(self) -> BobPublicKeys:
         policy = self.__bob_public_keys.pop()
         return policy
+
+    def save_treasure_map(self, treasure_map: EncryptedTreasureMap):
+        self.__treasure_map.append(treasure_map)
+
+    def fetch_treasure_map(self) -> EncryptedTreasureMap:
+        tmap = self.__treasure_map.pop()
+        return tmap
 
 
 def run_entire_cli_lifecycle(click_runner,
@@ -311,8 +320,8 @@ def run_entire_cli_lifecycle(click_runner,
                       '--network', TEMPORARY_DOMAIN,
                       '--teacher', teacher_uri,
                       '--config-file', str(alice_configuration_file_location.absolute()),
-                      '--m', 2,
-                      '--n', 3,
+                      '-m', 2,
+                      '-n', 3,
                       '--expiration', expiration,
                       '--label', random_label,
                       '--bob-encrypting-key', bob_encrypting_key,
@@ -329,9 +338,8 @@ def run_entire_cli_lifecycle(click_runner,
 
         grant_result = json.loads(grant_result.output)
 
-        # TODO: Expand test to consider manual treasure map handing
-        # # Alice puts the Treasure Map somewhere Bob can get it.
-        # side_channel.save_treasure_map(treasure_map=grant_result['result']['treasure_map'])
+        # Alice puts the Treasure Map somewhere Bob can get it.
+        side_channel.save_treasure_map(treasure_map=grant_result['result']['treasure_map'])
 
         return grant_result
 
@@ -348,14 +356,13 @@ def run_entire_cli_lifecycle(click_runner,
 
         alice_signing_key = side_channel.fetch_alice_pubkey()
 
-        retrieve_args = ('bob', 'retrieve',
+        retrieve_args = ('bob', 'retrieve-and-decrypt',
                          '--mock-networking',
                          '--json-ipc',
                          '--teacher', teacher_uri,
                          '--config-file', str(bob_configuration_file_location.absolute()),
                          '--message-kit', ciphertext_message_kit,
-                         '--label', label,
-                         '--policy-encrypting-key', policy_encrypting_key,
+                         '--treasure-map', side_channel.fetch_treasure_map(),
                          '--alice-verifying-key', alice_signing_key)
 
         retrieve_response = click_runner.invoke(nucypher_cli, retrieve_args, catch_exceptions=False, env=envvars)

@@ -606,25 +606,27 @@ def test_collect_rewards_integration(click_runner,
     # Alice creates a policy and grants Bob access
     blockchain_alice.selection_buffer = 1
 
-    M, N = 1, 1
+    threshold, shares = 1, 1
     duration_in_periods = 3
     days = (duration_in_periods - 1) * (token_economics.hours_per_period // 24)
     now = testerchain.w3.eth.getBlock('latest').timestamp
     expiration = maya.MayaDT(now).add(days=days)
     blockchain_policy = blockchain_alice.grant(bob=blockchain_bob,
                                                label=random_policy_label,
-                                               m=M, n=N,
+                                               threshold=threshold,
+                                               shares=shares,
                                                value=policy_value,
                                                expiration=expiration,
                                                handpicked_ursulas={ursula})
 
     # Ensure that the handpicked Ursula was selected for the policy
-    assert ursula.checksum_address in blockchain_policy.treasure_map.destinations
+    treasure_map = blockchain_bob._decrypt_treasure_map(blockchain_policy.treasure_map,
+                                                        blockchain_policy.publisher_verifying_key)
+    assert ursula.checksum_address in treasure_map.destinations
 
     # Bob learns about the new staker and joins the policy
     blockchain_bob.start_learning_loop()
     blockchain_bob.remember_node(node=ursula)
-    blockchain_bob.join_policy(random_policy_label, bytes(blockchain_alice.stamp))
 
     # Enrico Encrypts (of course)
     enrico = Enrico(policy_encrypting_key=blockchain_policy.public_key,
@@ -638,13 +640,12 @@ def test_collect_rewards_integration(click_runner,
 
         # Encrypt
         random_data = os.urandom(random.randrange(20, 100))
-        ciphertext, signature = enrico.encrypt_message(plaintext=random_data)
+        message_kit = enrico.encrypt_message(plaintext=random_data)
 
         # Decrypt
-        cleartexts = blockchain_bob.retrieve(ciphertext,
-                                             enrico=enrico,
-                                             alice_verifying_key=verifying_key,
-                                             label=random_policy_label)
+        cleartexts = blockchain_bob.retrieve_and_decrypt([message_kit],
+                                                         alice_verifying_key=verifying_key,
+                                                         encrypted_treasure_map=blockchain_policy.treasure_map)
         assert random_data == cleartexts[0]
 
         # Ursula Staying online and the clock advancing

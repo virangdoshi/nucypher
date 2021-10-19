@@ -21,6 +21,16 @@ web and mobile experience is accessible to application developers.
 Running Porter
 --------------
 
+There are a variety of possible infrastructure setups for running the Porter service, and two scenarios for running
+the Porter service are provided here:
+
+#. Run the Porter service directly via docker, docker-compose, or the CLI (see `Run Porter Directly`_)
+#. Run the Porter service with a reverse proxy via docker-compose (see `Run Porter with Reverse Proxy`_)
+
+
+Run Porter Directly
+*******************
+
 .. note::
 
     If running the Porter service using Docker or Docker Compose, it will run on port 80 (HTTP) or 443 (HTTPS). If
@@ -29,32 +39,33 @@ Running Porter
 Security
 ^^^^^^^^
 
-HTTPS
-+++++
-To run the Porter service over HTTPS, it will require a TLS key (``--tls-key-filepath`` option) and a TLS certificate.
+* **HTTPS:** To run the Porter service over HTTPS, it will require a TLS key and a TLS certificate. These can be
+  specified via the `` --tls-key-filepath`` and ``--tls-certificate-filepath`` CLI options or via the ``TLS_DIR``
+  environment variable for docker-compose.
+* **CORS:** Allowed origins for `Cross-Origin Resource Sharing (CORS) <https://en.wikipedia.org/wiki/Cross-origin_resource_sharing>`_
+  is not enabled by default and can be enabled either via the ``--allow-origins`` option for the CLI,
+  or the ``PORTER_CORS_ALLOW_ORIGINS`` environment variable for docker-compose.
 
-If desired, keys and self-signed certificates can be created for the localhost using the ``openssl`` command:
+  The value is expected to be a comma-delimited list of strings/regular expressions for origins to allow requests from. To allow all origins,
+  simply use "*".
 
-.. code:: bash
+  .. note::
 
-    $ openssl req -x509 -out cert.pem -keyout key.pem \
-      -newkey rsa:2048 -nodes -sha256 \
-      -subj '/CN=localhost' -extensions EXT -config <( \
-        printf "[dn]\nCN=localhost\n[req]\ndistinguished_name = dn\n[EXT]\nsubjectAltName=DNS:localhost\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth")
+      Origin values can be a string (for exact matches) or regular expressions (for more complex matches).
 
-.. important::
+      As part of CORS, the scheme (``https`` or ``http``) is also checked, so using only ``example.com`` is incorrect
+      to allow an origin from that specific domain. For exact matches, you can use ``https://example.com`` for HTTPS or
+      ``http://example.com`` for HTTP. For non-default ports (i.e. not 443 or 80), the ports should be specified
+      e.g. ``https://example.com:8000`` or ``http://example.com:8001``.
 
-    Self-signed certificates are not recommended, other than for testing.
+      For regular expressions, to allow all sub-domains of ``example.com``, you could use ``.*\.example\.com$`` which
+      incorporates wildcards for scheme and sub-domain. To allow multiple top-level domains you could use
+      ``.*\.example\.(com|org)$`` which allows any origins from both ``example.com`` and ``example.org`` domains.
 
-
-Authentication
-++++++++++++++
-Porter will allow the configuration of Basic Authentication out of the box via
-an `htpasswd <https://httpd.apache.org/docs/2.4/programs/htpasswd.html>`_ file. The use of Basic Authentication
-necessitates HTTPS since user credentials will be passed over the network as cleartext.
-
-Alternative authentication mechanisms can be implemented outside of Porter via an intermediary proxy service, for
-example an Nginx HTTPS reverse proxy.
+* **Authentication:** Porter will allow the configuration of Basic Authentication out of the box via
+  an `htpasswd <https://httpd.apache.org/docs/2.4/programs/htpasswd.html>`_ file. This file can be provided via the
+  ``--basic-auth-filepath`` CLI option or ``HTPASSWD_FILE`` environment variable for docker-compose. The use
+  of Basic Authentication necessitates HTTPS since user credentials will be passed over the network as cleartext.
 
 
 via Docker
@@ -101,6 +112,23 @@ Run Porter within Docker without acquiring or installing the ``nucypher`` codeba
             --tls-key-filepath /etc/porter/tls/<KEY FILENAME> \
             --tls-certificate-filepath /etc/porter/tls/<CERT FILENAME>
 
+   * Without Basic Authentication, but with CORS enabled to allow all origins:
+
+     .. code:: bash
+
+         $ docker run -d --rm \
+            --name porter-https-cors \
+            -v ~/.local/share/nucypher/:/root/.local/share/nucypher \
+            -v <TLS DIRECTORY>:/etc/porter/tls \
+            -p 443:9155 \
+            nucypher/porter:latest \
+            nucypher porter run \
+            --provider <YOUR WEB3 PROVIDER URI> \
+            --network <NETWORK NAME> \
+            --tls-key-filepath /etc/porter/tls/<KEY FILENAME> \
+            --tls-certificate-filepath /etc/porter/tls/<CERT FILENAME> \
+            --allow-origins "*"
+
    * With Basic Authentication:
 
      .. code:: bash
@@ -119,16 +147,22 @@ Run Porter within Docker without acquiring or installing the ``nucypher`` codeba
             --tls-certificate-filepath /etc/porter/tls/<CERT FILENAME> \
             --basic-auth-filepath /etc/porter/auth/htpasswd
 
+
    The ``<TLS DIRECTORY>`` is expected to contain the TLS key file (``<KEY FILENAME>``) and the
    certificate (``<CERT FILENAME>``) to run Porter over HTTPS.
 
+   .. note::
+
+       The commands above are for illustrative purposes and can be modified as necessary.
 
 #. Porter will be available on default ports 80 (HTTP) or 443 (HTTPS). The porter service running will be one of
    the following depending on the mode chosen:
 
    * ``porter-http``
    * ``porter-https``
+   * ``porter-https-cors``
    * ``porter-https-auth``
+
 
 #. View Porter logs
 
@@ -148,7 +182,7 @@ via Docker Compose
 
 Docker Compose will start the Porter service within a Docker container.
 
-#. Acquire the ``nucypher`` codebase - see :ref:`acquire_codebase`. There is no need
+#. :ref:`acquire_codebase`. There is no need
    to install ``nucypher`` after acquiring the codebase since Docker will be used.
 
 #. Set the required environment variables:
@@ -170,7 +204,8 @@ Docker Compose will start the Porter service within a Docker container.
 
          $ export NUCYPHER_NETWORK=<NETWORK NAME>
 
-   * *(Optional)* TLS directory variable containing the TLS key and the certificate to run Porter over HTTPS. The directory is expected to contain two files:
+   * *(Optional)* TLS directory containing the TLS key and certificate to run Porter over HTTPS.
+     The directory is expected to contain two files:
 
      * ``key.pem`` - the TLS key
      * ``cert.pem`` - the TLS certificate
@@ -180,6 +215,12 @@ Docker Compose will start the Porter service within a Docker container.
      .. code:: bash
 
          $ export TLS_DIR=<ABSOLUTE PATH TO TLS DIRECTORY>
+
+   * *(Optional)* Enable CORS. For example, to only allow access from your sub-domains for ``example.com``:
+
+     .. code:: bash
+
+         $ export PORTER_CORS_ALLOW_ORIGINS=".*\.example\.com$"
 
    * *(Optional)* Filepath to the htpasswd file for Basic Authentication
 
@@ -211,12 +252,14 @@ Docker Compose will start the Porter service within a Docker container.
 
          $ docker-compose -f deploy/docker/porter/docker-compose.yml up -d porter-https-auth
 
-#. Porter will be available on default ports 80 (HTTP) or 443 (HTTPS). The porter service running will be one of
+
+   Porter will be available on default ports 80 (HTTP) or 443 (HTTPS). The porter service running will be one of
    the following depending on the mode chosen:
 
    * ``porter-http``
    * ``porter-https``
    * ``porter-https-auth``
+
 
 #. View Porter logs
 
@@ -261,7 +304,6 @@ For a full list of CLI options, run:
 
         the Pipe for nucypher network operations
 
-        Reading Latest Chaindata...
         Network: <NETWORK NAME>
         Provider: ...
         Running Porter Web Controller at http://127.0.0.1:9155
@@ -284,16 +326,15 @@ For a full list of CLI options, run:
 
         the Pipe for nucypher network operations
 
-        Reading Latest Chaindata...
         Network: <NETWORK NAME>
         Provider: ...
         Running Porter Web Controller at https://127.0.0.1:9155
 
-    For HTTPS with Basic Authentication, add the ``--basic-auth-filepath`` option:
+    To enable CORS, use the ``--allow-origins`` option:
 
     .. code:: console
 
-        $ nucypher porter run --provider <YOUR WEB3 PROVIDER URI> --network <NETWORK NAME> --tls-key-filepath <TLS KEY FILEPATH> --tls-certificate-filepath <CERT FILEPATH> --basic-auth-filepath <HTPASSWD FILE>
+        $ nucypher porter run --provider <YOUR WEB3 PROVIDER URI> --network <NETWORK NAME> --tls-key-filepath <TLS KEY FILEPATH> --tls-certificate-filepath <CERT FILEPATH> --allow-origins ".*\.example\.com$"
 
 
         ______
@@ -305,18 +346,139 @@ For a full list of CLI options, run:
 
         the Pipe for nucypher network operations
 
-        Reading Latest Chaindata...
         Network: <NETWORK NAME>
         Provider: ...
+        CORS Allow Origins: ['.*\\.example\\.com$']
+        Running Porter Web Controller at https://127.0.0.1:9155
+
+    To enable Basic Authentication, add the ``--basic-auth-filepath`` option:
+
+    .. code:: console
+
+        $ nucypher porter run --provider <YOUR WEB3 PROVIDER URI> --network <NETWORK NAME> --tls-key-filepath <TLS KEY FILEPATH> --tls-certificate-filepath <CERT FILEPATH> --allow-origins ".*\.example\.com$" --basic-auth-filepath <HTPASSWD FILE>
+
+
+        ______
+        (_____ \           _
+        _____) )__   ____| |_  ____  ____
+        |  ____/ _ \ / ___)  _)/ _  )/ ___)
+        | |   | |_| | |   | |_( (/ /| |
+        |_|    \___/|_|    \___)____)_|
+
+        the Pipe for nucypher network operations
+
+        Network: <NETWORK NAME>
+        Provider: ...
+        CORS Allow Origins: ['.*\\.example\\.com$']
         Basic Authentication enabled
         Running Porter Web Controller at https://127.0.0.1:9155
+
+
+Run Porter with Reverse Proxy
+*****************************
+
+This type of Porter execution illustrates the use of a reverse proxy that is a go between or intermediate server that
+handles requests from clients to an internal Porter service. An NGINX reverse proxy instance is
+used in this case. It will handle functionality such as TLS, CORS, and authentication so that the Porter service
+itself does not have to, and allows for more complex configurations than provided by Porter itself. More information
+about the NGINX reverse proxy docker image used and additional configuration options
+is available `here <https://hub.docker.com/r/nginxproxy/nginx-proxy>`_.
+
+
+via Docker Compose
+^^^^^^^^^^^^^^^^^^
+
+Docker Compose will be used to start the NGINX reverse proxy and the Porter service containers.
+
+#. :ref:`acquire_codebase`. There is no need
+   to install ``nucypher`` after acquiring the codebase since Docker will be used.
+
+#. Set the required environment variables:
+
+   * Web3 Provider URI environment variable
+
+     .. code:: bash
+
+         $ export WEB3_PROVIDER_URI=<YOUR WEB3 PROVIDER URI>
+
+     .. note::
+
+         Local ipc is not supported when running via Docker.
+
+
+   * Network Name environment variable
+
+     .. code:: bash
+
+         $ export NUCYPHER_NETWORK=<NETWORK NAME>
+
+   * The reverse proxy is set up to run over HTTPS by default, and therefore requires a TLS directory containing
+     the TLS key and certificate for the reverse proxy. The directory is expected to contain two files:
+
+     * ``porter.local.key`` - the TLS key
+     * ``porter.local.crt`` - the TLS certificate
+
+     Set the TLS directory environment variable
+
+     .. code:: bash
+
+         $ export TLS_DIR=<ABSOLUTE PATH TO TLS DIRECTORY>
+
+   * *(Optional)* The CORS configuration is set in the ``nucypher/deploy/docker/porter/nginx/porter.local_location`` file.
+
+      .. important::
+
+          By default, CORS for the reverse proxy is configured to allow all origins
+
+     If you would like to modify the CORS allowed origin setting to be more specific, you can modify the file to
+     check for specific domains. There are some examples in the file - see `NGINX if-directive <https://nginx.org/en/docs/http/ngx_http_rewrite_module.html#if>`_
+     for adding ore complex conditional checks.
+
+     For example, to only allow requests from all sub-domains of ``example.com``, the file should be edited to include:
+
+     .. code::
+
+        if ($http_origin ~* (.*\.example\.com$)) {
+            set $allow_origin "true";
+        }
+
+     .. note::
+
+         If you modify the file you should rebuild the docker images using docker-compose.
+
+#. *(Optional)* Build the docker images:
+
+   .. code:: bash
+
+       $ docker-compose -f deploy/docker/porter/nginx/docker-compose.yml build
+
+#. Run the NGINX reverse proxy and Porter service
+
+   .. code:: bash
+
+       $ docker-compose -f deploy/docker/porter/nginx/docker-compose.yml up -d
+
+#. The NGINX reverse proxy will be publicly accessible via the default HTTPS port 443, and will route requests to the
+   internal Porter service.
+
+#. View Porter service logs
+
+   .. code:: bash
+
+       $ docker-compose -f deploy/docker/porter/nginx/docker-compose.yml logs -f nginx-porter
+
+#. Stop Porter service and NGINX reverse proxy
+
+   .. code:: bash
+
+       $ docker-compose -f deploy/docker/porter/nginx/docker-compose.yml down
 
 
 API
 ---
 
 Status Codes
-^^^^^^^^^^^^
+************
 All documented API endpoints use JSON and are REST-like.
 
 Some common returned status codes you may encounter are:
@@ -346,12 +508,12 @@ GitHub issue. For any questions, message us in our `Discord <https://discord.gg/
 
 
 URL Query Parameters
-^^^^^^^^^^^^^^^^^^^^
+********************
 All parameters can be passed as either JSON data within the request or as query parameter strings in the URL.
 Query parameters used within the URL will need to be URL encoded e.g. ``/`` in a base64 string becomes ``%2F`` etc.
 
 For ``List`` data types to be passed via a URL query parameter, the value should be provided as a comma-delimited
-String. For example, if a parameter is of type ``List[String]`` either a JSON list of Strings can be provided e.g.
+String. For example, if a parameter is of type ``List[String]`` either a JSON list of strings can be provided e.g.
 
 .. code:: bash
 
@@ -374,12 +536,12 @@ More examples shown below.
 
 
 GET /get_ursulas
-^^^^^^^^^^^^^^^^
+****************
 Sample available Ursulas for a policy as part of Alice's ``grant`` workflow. Returns a list of Ursulas
 and their associated information that is used for the policy.
 
 Parameters
-++++++++++
+^^^^^^^^^^
 +----------------------------------+---------------+-----------------------------------------------+
 | **Parameter**                    | **Type**      | **Description**                               |
 +==================================+===============+===============================================+
@@ -387,18 +549,18 @@ Parameters
 +----------------------------------+---------------+-----------------------------------------------+
 | ``duration_periods``             | Integer       | Number of periods required for the policy.    |
 +----------------------------------+---------------+-----------------------------------------------+
-| ``include_ursulas`` *(Optional)* | List[Strings] | | List of Ursula checksum addresses to        |
+| ``include_ursulas`` *(Optional)* | List[String]  | | List of Ursula checksum addresses to        |
 |                                  |               | | give preference to. If any of these Ursulas |
 |                                  |               | | are unavailable, they will not be included  |
 |                                  |               | | in result.                                  |
 +----------------------------------+---------------+-----------------------------------------------+
-| ``exclude_ursulas`` *(Optional)* | List[Strings] | | List of Ursula checksum addresses to not    |
+| ``exclude_ursulas`` *(Optional)* | List[String]  | | List of Ursula checksum addresses to not    |
 |                                  |               | | include in the result.                      |
 +----------------------------------+---------------+-----------------------------------------------+
 
 
 Returns
-+++++++
+^^^^^^^
 List of Ursulas with associated information:
 
     * ``encrypting_key`` - Ursula's encrypting key encoded as hex
@@ -406,7 +568,7 @@ List of Ursulas with associated information:
     * ``uri`` - Ursula's URI
 
 Example Request
-+++++++++++++++
+^^^^^^^^^^^^^^^
 .. code:: bash
 
     curl -X GET <PORTER URI>/get_ursulas \
@@ -424,7 +586,7 @@ OR
 
 
 Example Response
-++++++++++++++++
+^^^^^^^^^^^^^^^^
 .. code::
 
     Status: 200 OK
@@ -466,47 +628,82 @@ Example Response
     }
 
 
-POST /publish_treasure_map
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-Publish a treasure map to the network as part of Alice's ``grant`` workflow. The treasure map associated
-with the policy is stored by the network.
+POST /retrieve_cfrags
+*********************
+Get data re-encrypted by the network as part of Bob's ``retrieve`` workflow.
 
 Parameters
-++++++++++
-+----------------------------------+---------------+----------------------------------------+
-| **Parameter**                    | **Type**      | **Description**                        |
-+==================================+===============+========================================+
-| ``treasure_map``                 | String        | Treasure map bytes encoded as base64.  |
-+----------------------------------+---------------+----------------------------------------+
-| ``bob_encrypting_key``           | String        | Bob's encrypting key encoded as hex.   |
-+----------------------------------+---------------+----------------------------------------+
+^^^^^^^^^^
++-------------------------------------------+---------------+----------------------------------------+
+| **Parameter**                             | **Type**      | **Description**                        |
++===========================================+===============+========================================+
+| ``treasure_map``                          | String        | | Unencrypted treasure map bytes       |
+|                                           |               | | encoded as base64.                   |
++-------------------------------------------+---------------+----------------------------------------+
+| ``retrieval_kits``                        | List[String]  | | List of retrieval kit bytes encoded  |
+|                                           |               | | as base64.                           |
++-------------------------------------------+---------------+----------------------------------------+
+| ``alice_verifying_key``                   | String        | Alice's verifying key encoded as hex.  |
++-------------------------------------------+---------------+----------------------------------------+
+| ``bob_encrypting_key``                    | String        | Bob's encrypting key encoded as hex.   |
++-------------------------------------------+---------------+----------------------------------------+
+| ``bob_verifying_key``                     | String        | Bob's verifying key encoded as hex.    |
++-------------------------------------------+---------------+----------------------------------------+
+
+    * A single *retrieval kit* is an encapsulation of the information necessary to obtain cfrags from Ursulas.
+      It contains a capsule and the checksum addresses of the Ursulas from which the requester has
+      already received cfrags, i.e. the Ursulas in the treasure map to skip.
+
+      The format of a *retrieval kit* is:
+
+      * .. code::
+
+            base64(<capsule bytes>)
+
+        if no cfrags were obtained from Ursulas in previous ``/retrieve_cfrags`` calls
+
+      OR
+
+      * .. code::
+
+            base64(<capsule bytes><bytes of ursula_1 checksum address><bytes of ursula_2 checksum address>...)
+
+        if some cfrags were already obtained from a subset of Ursulas for a *retrieval kit* in a
+        previous ``/retrieve_cfrags`` call; for example, retrying after receiving less than a threshold of cfrags
+        because some Ursulas may have experienced a blip in connectivity. This is an optional optimization that provides
+        retry functionality that skips previously successful reencryption operations.
 
 Returns
-+++++++
-Confirmation that the treasure map was published:
+^^^^^^^
+The result of the re-encryption operations performed:
 
-    * ``published`` - Value of ``true``.
-
-If publishing the treasure map fails, an error status code is returned.
+    * ``retrieval_results`` - The list of results from the re-encryption operations performed; contains a mapping of
+      Ursula checksum address/cfrag pairs. The cfrags are base64 encoded. The list of results corresponds to the order
+      of the ``retrieval_kits`` list provided. If there were issues obtaining cfrags for a particular
+      *retrieval kit*, the corresponding list of cfrags could be empty or less than the expected threshold.
 
 Example Request
-+++++++++++++++
+^^^^^^^^^^^^^^^
 .. code:: bash
 
-    curl -X POST <PORTER URI>/publish_treasure_map \
+    curl -X POST <PORTER URI>/retrieve_cfrags \
         -H "Content-Type: application/json" \
-        -d '{"treasure_map": "Qld7S8sbKFCv2B8KxfJo4oxiTOjZ4VPyqTK5K1xK6DND6TbLg2hvlGaMV69aiiC5QfadB82w/5q1Sw+SNFHN2e ...",
-             "bob_encrypting_key": "026d1f4ce5b2474e0dae499d6737a8d987ed3c9ab1a55e00f57ad2d8e81fe9e9ac"}'
+        -d '{"treasure_map": "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",
+             "retrieval_kits": ["gANDYgMKitDPd/QttLGy+s7Oacnm8pfbl3Qs2UD3IS1d9wF3awJsXnjFq7OkRQE45DV4+Ma2lDSJ5SeKEBqJK5GdPMB6CRwJ1hX7Y5SYgzpZtr/Z5/S3DHgVKn+8fWX92FaqEXIGcQBjYnVpbHRpbnMKc2V0CnEBXXEChXEDUnEEhnEFLg=="],
+             "alice_verifying_key": "02d3389864e9e7206ae1d18301bbd67ad8e0bdf257b3085c9aa13e9438ff9133f2",
+             "bob_encrypting_key": "03d41cb7aa2df98cb9fb1591b5556363862a367faae6d0e4874a860321141788cb",
+             "bob_verifying_key": "039c19e5d44b016af126d89488c4ae5599e0fde9ea30047754d1fe173d05eee468",
+             "policy_encrypting_key": "02cdb2cec70b568c0624b72450c2043836aa831b06b196a50db461e87acddb791e"}'
 
 OR
 
 .. code:: bash
 
-    curl -X POST "<PORTER URI>/publish_treasure_map?treasure_map=Qld7S8sbKFCv2B8KxfJo4oxiTOjZ4VPyqTK5K1xK6DND6TbLg2hvlGaMV69aiiC5QfadB82w%2F5q1Sw%2BSNFHN2e ...&bob_encrypting_key=026d1f4ce5b2474e0dae499d6737a8d987ed3c9ab1a55e00f57ad2d8e81fe9e9ac"
+    curl -X POST "<PORTER URI>/retrieve_crags?retrieval_kits=%5B%27gANDYgMKitDPd%2FQttLGy%2Bs7Oacnm8pfbl3Qs2UD3IS1d9wF3awJsXnjFq7OkRQE45DV4%2BMa2lDSJ5SeKEBqJK5GdPMB6CRwJ1hX7Y5SYgzpZtr%2FZ5%2FS3DHgVKn%2B8fWX92FaqEXIGcQBjYnVpbHRpbnMKc2V0CnEBXXEChXEDUnEEhnEFLg%3D%3D%27%5D&alice_verifying_key=02d3389864e9e7206ae1d18301bbd67ad8e0bdf257b3085c9aa13e9438ff9133f2&bob_encrypting_key=03d41cb7aa2df98cb9fb1591b5556363862a367faae6d0e4874a860321141788cb&bob_verifying_key=039c19e5d44b016af126d89488c4ae5599e0fde9ea30047754d1fe173d05eee468&policy_encrypting_key=02cdb2cec70b568c0624b72450c2043836aa831b06b196a50db461e87acddb791e&treasure_map=ivOS2%2FMarBpkLAksM0O%2BpgLUHAV%2F0ceIBarBKwqUpAXARhpvuwAAAm0DoDAtioScWJSHWNGzQd9pMGW2dRF4IvJX%2FExALF6AcLICLCBP%2Btte8QR4l0GLNy3YwK4oO8f8Ht0Ij%2Bv0feWWwgeo3R7FVeC4ExDuYvgdsV6jCP3vqZnLphIPk8LQeo1XVAABAtM4mGTp5yBq4dGDAbvWetjgvfJXswhcmqE%2BlDj%2FkTPyAAAB5H0rD40N1u5Ct455sh4SicbHTGsXcRSt%2FadeHVl3zylNpWDsFbeon7VI5fGGmWLAKmCJ5ARU1Mgfwg0pfsXDgHTky6XOeXnNw630z9muBE4NMUiESOQm%2FRAsphMR%2FDEIMRaCgjhaE2diVdVAm15JjRXV9JN5gAp58Y1ecPcWR2lMcgAMHBFMX60bpbgjySha94Hwb0kR2SKIFkPQnuMljoQxutTDAyh55eE2sHf9ZOAVZkpKQu8NkaWy7adx%2F1QefezNbngX9c2yYml133Al4oGrLWYA3fnbod2Y6F1oeG5As5ZIW%2FO8k7Rf%2B3i9a%2BDS1i%2BKbgETHQGxOkQSpNPUmwJjtzDJQ1xFMmKkxgwUtXenfyrzDDPU6EQloWK2PmyTD%2FhSKHLpkLyzYp95gadzDiS8RlOnNw%2FuP8vfMPSrXYGZSKXvHvlrQxKOjnF7FrheauwwRPjM0yYTftPs3jNkZwCTl%2BEwn6NdLur927SeGyAB3gHCjHenje%2B3hU1jsn%2FmwfwLJwSMT7V0rbXV6I0NYhjQy2Ajj%2B7ev%2FNSvRdeneeYTU3iHoO6nIhWHBLVExWafu59B6hhsm261kvXw718eiUcL%2B1X1eZ5WApplCuXGQV7L6DZxlQPanRJy7BZZQmFwEUoMCnx9mGbOKmNbeCADx3vwKY5nrbTDAAAAm0Cccv5a3jS2QiICCzCyA0Ot3U7VT1F3d%2BB3cHcmv8DaCwDODb8IadnsiVK%2BdfbPLn3ne%2Blm8d9yqhh6bLi6KNDb6yiWrjWnd4Irnnh3amMwik00vdyQKYvdsaSEJqtVLmtcQABAtM4mGTp5yBq4dGDAbvWetjgvfJXswhcmqE%2BlDj%2FkTPyAAAB5Do%2Feww%2BG709VPQwkxd0tRFyJh97Wcb5uSGs%2B4fK9O%2B5CTf5rDQSO3ueWLRF4ytRzd3QjK6%2B8FlXsJQM5n5pGLUNNWpUlimk2MmPaLehC9uGBfQzoTfQof%2BU8CBXkTTnRi0IeAYMq8eiuEnNR%2FoOJjpjuwgZH4gue%2FsSDF8FyhFU4SwF%2FWdjLg0FgmZzRlqABNXeE8vOofydEMYgUMPd8qxjimAGhkYlBUNjlme4BUdA2AqndMttpc3y9ILTobaGSnjgWfq9Ztw%2Fn72scPI11T%2BYMaaXd33dacNPx%2BpVzcgqi358PT8WQ6U3n%2B1be8mhF8VGEO7%2F5zLFHECRCv06erER8ChTZvr4rb8Y0xRCz%2FpatllLqvWZkGSmotmsi9qAptgG%2FXkozOZIqmBuM2AuQTwaePyuJzelc5xD51OlkQRahV6%2Bok3CokckwtOXtC6dzq4dmh03Uj5ZeKj8IgITDPN6jCf5TwLmXSuEGl5W%2FxmrEUeNlrthlJm7Cdd1NpLn3RZNCgSS4%2BPw9cpY6fj%2FmF8yR0erf9Tkrxr7FXzSe%2FUWkfeB3aQPulP4U3nM7vJIz9DBcJxtdozfqHchZ%2FK%2BVnaW%2F7IlNhvu3Cwk%2BN3D9sUwf%2FuHQuE%2FQSsYZ0fjUCnB1UgJMjho5Sd4CHLNoCFroNj71YtnpdXjUQAAAm0D5ITdM1U28%2B6%2FLU%2B%2BJw%2FUTMOefScVULkEyaojkyJK574Dc96zie3HtMN0ahALfOg5yn2z2zZpwqsLk9mpT23GD8AYR55RcvLHGIjJTubtuMINy7ZBgbZmisPDt5DvHVKj1wABAtM4mGTp5yBq4dGDAbvWetjgvfJXswhcmqE%2BlDj%2FkTPyAAAB5B9Wn5rfJ8LS81DIkZj6By39KZPYLoNSpR%2BVEZsLaSEo%2FHTMG43Q%2FgG%2FYjZMQHBEZwleE1H35P3EuDlWOriEQxveH7ihmHVSDfj8R%2B6xo%2F263QCLqtg9djSFPW7h6QRx5JBM%2BWABcmIZQrAvMDe1q7F8VOGRDMf8tW%2F7sySMFn9pQ7735kasw8iNsGPX9gVNcncSuh8hmgWGzwciUU%2FY5SYmQvl0Oc15G5%2FkFhIA9nDVfZR4sMBRB9ApYbnNYsxtH12wWhTo04hPEGfzsqKK10muLy%2Bqpo3VBhX24HPTBAvYm68f0UVD%2Ba0cZWmgYKypmMqApJ87RnPvXbE3rmKepJM8u02O4X1OBlfDZBrTsbCbMxeniS6bzE6VPE62jOW6GIuyV6%2BNQS3PZTuTWG%2Fp7T5n2EC%2FPf%2FCvGLq41gQDU9VT2aCbHkbr9C0klVJfUwqdE%2F51zLmcY8wpx3P%2BOS%2BlrIjxQzOpWSKQfsNyt1DhKpKb5Y1wWrUGm6s0sBEG7FQK2SmWMhpjB36ZRdmtQ8%2Fmvh20KELR6W%2BocGosR20TXdGINzJEnobbTkkGNz2sqzePvL7Ql5Utc%2FGCaZYC2yIvJEGBOSBVtKvwqTOaMOFTaCIx4R5f3X17umkMD1YCvir39cREkU%3D"
 
 
 Example Response
-++++++++++++++++
+^^^^^^^^^^^^^^^^
 .. code::
 
     Status: 200 OK
@@ -516,118 +713,14 @@ Example Response
 
     {
        "result": {
-          "published": true
-       },
-       "version": "6.0.0"
-    }
-
-
-GET /get_treasure_map
-^^^^^^^^^^^^^^^^^^^^^
-Retrieve a treasure map from the network as part of Bob's ``retrieve`` workflow. Bob needs to obtain the treasure map
-associated with a policy, to learn which Ursulas were assigned to service the policy.
-
-Parameters
-++++++++++
-+----------------------------------+---------------+----------------------------------------+
-| **Parameter**                    | **Type**      | **Description**                        |
-+==================================+===============+========================================+
-| ``treasure_map_id``              | String        | Treasure map identifier.               |
-+----------------------------------+---------------+----------------------------------------+
-| ``bob_encrypting_key``           | String        | Bob's encrypting key encoded as hex.   |
-+----------------------------------+---------------+----------------------------------------+
-
-
-Returns
-+++++++
-The requested treasure map:
-
-    * ``treasure_map`` - Treasure map bytes encoded as base64
-
-Example Request
-+++++++++++++++
-.. code:: bash
-
-    curl -X GET <PORTER URI>/get_treasure_map \
-        -H "Content-Type: application/json" \
-        -d '{"treasure_map_id": "f6ec73c93084ce91d5542a4ba6070071f5565112fe19b26ae9c960f9d658903a",
-             "bob_encrypting_key": "026d1f4ce5b2474e0dae499d6737a8d987ed3c9ab1a55e00f57ad2d8e81fe9e9ac"}'
-
-OR
-
-.. code:: bash
-
-    curl -X GET "<PORTER URI>/get_treasure_map?treasure_map_id=f6ec73c93084ce91d5542a4ba6070071f5565112fe19b26ae9c960f9d658903a&bob_encrypting_key=026d1f4ce5b2474e0dae499d6737a8d987ed3c9ab1a55e00f57ad2d8e81fe9e9ac"
-
-Example Response
-++++++++++++++++
-.. code::
-
-    Status: 200 OK
-
-
-.. code:: json
-
-    {
-       "result": {
-          "treasure_map": "Qld7S8sbKFCv2B8KxfJo4oxiTOjZ4VPyqTK5K1xK6DND6TbLg2hvlGaMV69aiiC5QfadB82w/5q1Sw+SNFHN2esWgAbs38QuUVUGCzDoWzQAAAGIAuhw12ZiPMNV8LaeWV8uUN+au2HGOjWilqtKsaP9fmnLAzFiTUAu9/VCxOLOQE88BPoWk1H7OxRLDEhnBVYyflpifKbOYItwLLTtWYVFRY90LtNSAzS8d3vNH4c3SHSZwYsCKY+5LvJ68GD0CqhydSxCcGckh0unttHrYGSOQsURUI4AAAEBsSMlukjA1WyYA+FouqkuRtk8bVHcYLqRUkK2n6dShEUGMuY1SzcAbBINvJYmQp+hhzK5m47AzCl463emXepYZQC/evytktG7yXxd3k8Ak+Qr7T4+G2VgJl4YrafTpIT6wowd+8u/SMSrrf/M41OhtLeBC4uDKjO3rYBQfVLTpEAgiX/9jxB80RtNMeCwgcieviAR5tlw2IlxVTEhxXbFeopcOZmfEuhVWqgBUfIakqsNCXkkubV0XS2l5G1vtTM8oNML0rP8PyKd4+0M5N6P/EQqFkHH93LCDD0IQBq9usm3MoJp0eT8N3m5gprI05drDh2xe/W6qnQfw3YXnjdvf2A="
-       },
-       "version": "6.0.0"
-    }
-
-
-POST /exec_work_order
-^^^^^^^^^^^^^^^^^^^^^
-Use a work order to execute a re-encrypt operation on the network network as part of Bob's ``retrieve`` workflow.
-
-Parameters
-++++++++++
-+----------------------------------+---------------+----------------------------------------+
-| **Parameter**                    | **Type**      | **Description**                        |
-+==================================+===============+========================================+
-| ``ursula``                       | String        | | Checksum address corresponding to    |
-|                                  |               | | the Ursula to execute the work order.|
-+----------------------------------+---------------+----------------------------------------+
-| ``work_order_payload``           | String        | Work order payload encoded as base64.  |
-+----------------------------------+---------------+----------------------------------------+
-
-
-Returns
-+++++++
-The result of the re-encryption operation performed on the work order payload:
-
-    * ``work_order_result`` - The result of the re-encryption operation returning combined cFrag and
-      associated signature bytes encoded as base64, i.e. it is of the format
-      ``base64(<cfrag_1> || <cfrag_1_signature> || <cfrag_2> || <cfrag_2_signature> ...)``.
-
-Example Request
-+++++++++++++++
-.. code:: bash
-
-    curl -X POST <PORTER URI>/exec_work_order \
-        -H "Content-Type: application/json" \
-        -d '{"ursula": "0xE57bFE9F44b819898F47BF37E5AF72a0783e1141",
-             "work_order_payload": "QoQgOCRvtT4qG0nb5eDbfJ3vO6jMeoy9yp7lvezWKyNF0I6f/uQBPJed9FM7oc7jDAzqyDYD1C/1Cnab+kdobAJT7a3Z/KcOot4SwhgZ0eLGYVuhiAnXP9F7lBDosmvd2gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1I8O2JB/65y0K6m0dxmCpYJfsbpV63dMqcmTTPZAuWuA6LDyDa9JOqPF1OYQWHYi93wNLVLyHCLH6UEf5JOSgmgZOCPIzOaUpQMlr1rIDGExrF6zrLGpAwpPMMOzqa8tjiWHFaHWyLsUMyVKT8v1Psa/iIQ4NZDG+gKDSjgp33MbLml/ti+1p75M2ewuUbCjCWq5Mkf5ycqyEQUMt0IcTgNA6vxewmaBt7UTsYaUzkeTkNz/hLO9+ZFJ1NzJLxeweSqAiNQtfBvG7Fih6oaQT9uslu4QAwOTgolqkinEsoNx9XRL8Ocb8pO/5POBfPxiH8c2v5lrr6HhkAKAC5QODfegIToy29k0KIf3bCoqaVYncvjLJcum0AatnyOkYoV9Zf5wojvyFJE+MZ/homke4Yd8irUdoLSgxDuEDtyRNMuTpcHA37Z+npgp/zi0DQUvK35xZE+DmGYhaHTOPQesiTqyJc/Az22wtTfA3n9JwjSl6CjADGjHWgUPMQWzW8fqICo1iek2z7oFHM24yCtyvsEbC2Mm25LEZi/k2mfbgpNRg5PqW9qj/hTK19Cm4s0rlK7e2odCD5T3Iy0s6eg0KgR0RhT/ayH42be1FHgXFBFeABhm0fM8ZxorhMF1ce/yDPOaRZ8"}'
-
-OR
-
-.. code:: bash
-
-    curl -X POST "<PORTER URI>/exec_work_order?ursula=0xE57bFE9F44b819898F47BF37E5AF72a0783e1141&work_order_payload=QoQgOCRvtT4qG0nb5eDbfJ3vO6jMeoy9yp7lvezWKyNF0I6f%2FuQBPJed9FM7oc7jDAzqyDYD1C%2F1Cnab%2BkdobAJT7a3Z%2FKcOot4SwhgZ0eLGYVuhiAnXP9F7lBDosmvd2gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1I8O2JB%2F65y0K6m0dxmCpYJfsbpV63dMqcmTTPZAuWuA6LDyDa9JOqPF1OYQWHYi93wNLVLyHCLH6UEf5JOSgmgZOCPIzOaUpQMlr1rIDGExrF6zrLGpAwpPMMOzqa8tjiWHFaHWyLsUMyVKT8v1Psa%2FiIQ4NZDG%2BgKDSjgp33MbLml%2Fti%2B1p75M2ewuUbCjCWq5Mkf5ycqyEQUMt0IcTgNA6vxewmaBt7UTsYaUzkeTkNz%2FhLO9%2BZFJ1NzJLxeweSqAiNQtfBvG7Fih6oaQT9uslu4QAwOTgolqkinEsoNx9XRL8Ocb8pO%2F5POBfPxiH8c2v5lrr6HhkAKAC5QODfegIToy29k0KIf3bCoqaVYncvjLJcum0AatnyOkYoV9Zf5wojvyFJE%2BMZ%2Fhomke4Yd8irUdoLSgxDuEDtyRNMuTpcHA37Z%2Bnpgp%2Fzi0DQUvK35xZE%2BDmGYhaHTOPQesiTqyJc%2FAz22wtTfA3n9JwjSl6CjADGjHWgUPMQWzW8fqICo1iek2z7oFHM24yCtyvsEbC2Mm25LEZi%2Fk2mfbgpNRg5PqW9qj%2FhTK19Cm4s0rlK7e2odCD5T3Iy0s6eg0KgR0RhT%2FayH42be1FHgXFBFeABhm0fM8ZxorhMF1ce%2FyDPOaRZ8"
-
-
-Example Response
-++++++++++++++++
-.. code::
-
-    Status: 200 OK
-
-
-.. code:: json
-
-    {
-       "result": {
-          "work_order_result": "AAABpwIE30NxwNdRKKYbQ8g0/smtFuDoTPy8wrkJykX80A4LKAMQ4B9nUoyq9JHyDvnLXf314LrLA4roe/HuUXXNsF+6muWUZPwe8IA/SwkPJnpggGu0xQdVl3eMGpgHYL9pW3jWA0ztwFmQ6qpgJkXxdkK7j62kBSjzWTziWRaWzgd0bXRqA71fJSvQp/q2V5do3/g2BvqN8R22ZBxzn0s77p0s7LyIA+K1a1aMbR22OtpGdmUTbl3SK7gSYAVsHtpBbvok/FstA78AbixycMh5OgOXze62RMFXFvNeK5aw8vld0YefHkoWA+4YKNw8zddlhhH4jv8gXKxZQcdxA4tpxYiigTFuJFb4B/WzU9MEvZQUDfVVxtAgtpyTQaw+EFVc313bFrPjfZIhbodl2FBSa8HHbyU+zyuQbx3xIUcTXrkWCLV7+J6mrvjrJkGWH+AJAceN8P7uPvK101P5OKs6oiO1/voDPIOr0boQB6pE+gHGH56Eb8Q3W5uGJ9p2e2Ul90vMFRmMRLVvHToNrMgrMOLNa/TenaiAxK+xfiOnNNE0Mi3LQTAj0c+mTLM1fZ81zIgT0yQXJzfKfiiJuAN35e1JlgYISnxchLqv6gYldeRxx1Xz2v5TZtTvRjlP9PCEEaW4sQaqW+0AAAGnAghcC66v3rlE4nN8utPifyLlG6dwwg25KVfTwfjiqOagAsrrQEi1CHnTyFl50DSruaygVnPj+sCv/G9onIExiRv6dcjhZhASDM/2P67XlNiwn074GI5f8e1orNVcVXpvS+0DzdQxL+pbkmNDH6XkZjbAyYcJ+B8zPtcMeIlEhPEJz7ICxJ0agnJr6DgGNvsNXeGSDQWVHRAwPlTOvvh0lZnOvnICfMParvaZkDVft9z4x7HUTuvkJmEnp1qAGefyDx57MzACBbvqNTHVDhv4qDmfe0ynjIKO+1bYT8G4s7xmgmS9y8ECOO+/cX1z9MgijH4wZLG36kJq50BXXOU7U5yRvzQe4R0W2noI4lfmPg3bTqXQyZrvINVImvwuyvQMoQTDM9HFM4dUyN4vLDpSe3bHZmpTIpI8VtOMNUAo+wGzfBMEsSPAxJ/fOZCL33HTMIe0p+q4F9ksDNxO3XFHwEuMm2FuSRuQbnKUtxqXp4YiDdF2PKPKthfZ7WUZN+Z+wAjMzwE28Bf3m5SGZsXDQxaKTioWJUxDbzdHnpcI28+4srZVr2SU6GKR5yGDrAJxLf2Of4+UHK/UNakH45bWJfYq6Rr+iWe0aFHDtQHqkBtWWmvWJBLhyzsXnqBUhyKQr3DEZ3/R0wAAAacCq+RZNiJQx5WYQLVnrQefNU+A55LL75iRMOJRxukGlEoD5D30UIArtCv4d+iN6XLZhEM6Jsqg5ltPWfFZyRzHbb+StN+TFlQ/LDnFRPQ0MQpGMDjGckCqklZdn0NUGDkTcgOmyY2bhoGcgkob3QvlhSOYS/LPLRCnyn5fn0kABoNKagKuITPL9Tmg87k+yK9PQFu9P3cAOCvL/ZUPJSKI5r47HANuLdqh4zhfyAe5PW3qi7GnzRXRySA+6lImyD/nWqbb2gNv9MYrA2ioheO5jXA2uArwgZObnLApPsIc7Jwl1ko7KgJXN+EsBMdBHwz2Ps6LJt9z73y/HnuivgSNkssxZ8pIXqk9NGRwgBhP2DW0Ctl30bRNX6SIEcD/b0yzsfKIUQk3L7QwPYxE9iKicz608hLzrCUwmHoa8oWA/9dQks8KBD1tTrm0KM5fJcXonZHzeDFIYcHMDMu1PJkwFsLWRVTXJJBgDMUQJix9mpb3px0jMPjAZuDlpherQsLNNRQJq75pVu7hyKmeDAPBGhBNND2NxB3pg3RrFhShdosjpRP/gCJhuI0IdAnajYCG+vmIilyS/8oZomMEg6b8KChUOPVkp/VPFXUKow4jzLXjf7R9DJM/41Yn5ut7IaLi37X/jwwa"
+          "retrieval_results": [
+             {
+                "cfrags": {
+                   "0xd41c057fd1c78805AAC12B0A94a405c0461A6FBb": "Alvyx0r4IXvOWppw8jzbdx/8lIhL36ZAhbvNcTfo4KC6AqUxu6iP9gOVSaiehZAAQ89ho9MIGyDYdJIjg/dRkR1DuNX9qLnhAsg+qJvGcPpEXHNG0L2WHxe+AUNqtOSnwiEDegcnRTgUFyR4gfs6/M49/t8iXuXJcT6Szcwtx2JlZtACpa4KPLa5hFgI67rkiZQTqzn/aLPEzdD1zhhUyaHpJXoDfXLdpQmyEl8aI7ZOsBLh6PtPlx86/cvU0NOsR8wIoYUDe7BiAijbjo4VtcYrfvzu9CWRiWb0TQQJO6v47am/RPUD6NTr5+S/m+EvGK22L7XWtMHw7X2M380i4z2X1jxeYZaLmtuJJLAQL61kEIFv/1afCVDe+odbZ0Wivq3EiQzd0UcYRcvhIyGJdBksGv4GjfXSNNl6OCn1ny1Cn056juxGQs3yxzQZvfEN0UAOsI5IcTvOh3/kBNGfJGH+Qfv/CKc=",
+                   "0x68E527780872cda0216Ba0d8fBD58b67a5D5e351": "AvGBNjTE1WrgQLkDP0ViipGoSjlaq0Plge6szUOasYsnAnB7Q0OKN52h3kyEax8bTFA8uqQ1mg8/X+ccRnda7bjyQu3Oep16gNGkNItWo0Eb7XC8ZDnAJMe6VrQMeq4l6EQDegcnRTgUFyR4gfs6/M49/t8iXuXJcT6Szcwtx2JlZtADcS7sUWM293AkLyacmHcj/ohsWrhSTqyyV8oCzVeCR9ICLqSTeEjoYyBhRseKvU+OObMv+Vi9kW68SEbHJFZhpHgC1UsJjSTGH1hpBxYUpQcaFU4O+nafk1NIQcEfDY9xKLYD2FAkkVF0OcSaeSNCcgWmBnDYY1n9lnQbF4gvumFoO91+19DjGTa/lY0e/GWI0HrZ3D7Qe8uMUD5LZIth9RHdVgT8WFrVd7Wg47/ieMPbW/zNJ0jKgnlmgcUH4v+VSvvqWCL3cqm83psyABURpMntldLubCBgTrK8vCHP/C0Aduo="
+                }
+             }
+          ]
        },
        "version": "6.0.0"
     }

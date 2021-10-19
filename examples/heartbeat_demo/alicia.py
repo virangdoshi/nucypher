@@ -14,7 +14,7 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
+import base64
 import datetime
 import sys
 import json
@@ -131,7 +131,7 @@ doctor_strange = Bob.from_public_keys(verifying_key=doctor_pubkeys['sig'],
 policy_end_datetime = maya.now() + datetime.timedelta(days=1)
 # - m-out-of-n: This means Alicia splits the re-encryption key in 5 pieces and
 #               she requires Bob to seek collaboration of at least 3 Ursulas
-m, n = 2, 3
+threshold, shares = 2, 3
 
 
 # With this information, Alicia creates a policy granting access to Bob.
@@ -139,10 +139,9 @@ m, n = 2, 3
 print("Creating access policy for the Doctor...")
 policy = alicia.grant(bob=doctor_strange,
                       label=label,
-                      m=m,
-                      n=n,
+                      threshold=threshold,
+                      shares=shares,
                       expiration=policy_end_datetime)
-policy.treasure_map_publisher.block_until_complete()
 print("Done!")
 
 # For the demo, we need a way to share with Bob some additional info
@@ -151,6 +150,7 @@ policy_info = {
     "policy_pubkey": bytes(policy.public_key).hex(),
     "alice_sig_pubkey": bytes(alicia.stamp).hex(),
     "label": label.decode("utf-8"),
+    "treasure_map": base64.b64encode(bytes(policy.treasure_map)).decode()
 }
 
 filename = POLICY_FILENAME

@@ -77,7 +77,7 @@ from tests.constants import (
     MIN_STAKE_FOR_TESTS,
     MOCK_CUSTOM_INSTALLATION_PATH,
     MOCK_CUSTOM_INSTALLATION_PATH_2,
-    MOCK_POLICY_DEFAULT_M,
+    MOCK_POLICY_DEFAULT_THRESHOLD,
     MOCK_REGISTRY_FILEPATH,
     NUMBER_OF_URSULAS_IN_DEVELOPMENT_NETWORK,
     TEST_GAS_LIMIT,
@@ -104,7 +104,7 @@ from tests.utils.config import (
 )
 from tests.utils.middleware import MockRestMiddleware, MockRestMiddlewareForLargeFleetTests
 from tests.utils.policy import generate_random_label
-from tests.utils.ursula import (MOCK_KNOWN_URSULAS_CACHE, MOCK_URSULA_STARTING_PORT, _mock_ursula_reencrypts,
+from tests.utils.ursula import (MOCK_KNOWN_URSULAS_CACHE, MOCK_URSULA_STARTING_PORT,
                                 make_decentralized_ursulas, make_federated_ursulas)
 
 test_logger = Logger("test-logger")
@@ -220,13 +220,13 @@ def idle_federated_policy(federated_alice, federated_bob):
     """
     Creates a Policy, in a manner typical of how Alice might do it, with a unique label
     """
-    m = MOCK_POLICY_DEFAULT_M
-    n = NUMBER_OF_URSULAS_IN_DEVELOPMENT_NETWORK
+    threshold = MOCK_POLICY_DEFAULT_THRESHOLD
+    shares = NUMBER_OF_URSULAS_IN_DEVELOPMENT_NETWORK
     random_label = generate_random_label()
     policy = federated_alice.create_policy(federated_bob,
                                            label=random_label,
-                                           m=m,
-                                           n=n,
+                                           threshold=threshold,
+                                           shares=shares,
                                            expiration=maya.now() + timedelta(days=5))
     return policy
 
@@ -239,9 +239,16 @@ def enacted_federated_policy(idle_federated_policy, federated_ursulas):
     # REST call happens here, as does population of TreasureMap.
     enacted_policy = idle_federated_policy.enact(network_middleware=network_middleware,
                                                  handpicked_ursulas=federated_ursulas)
-    enacted_policy.treasure_map_publisher.block_until_complete()
-
     return enacted_policy
+
+
+@pytest.fixture(scope="module")
+def federated_treasure_map(enacted_federated_policy, federated_bob):
+    """
+    The unencrypted treasure map corresponding to the one in `enacted_federated_policy`
+    """
+    yield federated_bob._decrypt_treasure_map(enacted_federated_policy.treasure_map,
+                                              enacted_federated_policy.publisher_verifying_key)
 
 
 @pytest.fixture(scope="module")
@@ -254,12 +261,13 @@ def idle_blockchain_policy(testerchain, blockchain_alice, blockchain_bob, token_
     days = periods * (token_economics.hours_per_period // 24)
     now = testerchain.w3.eth.getBlock('latest').timestamp
     expiration = maya.MayaDT(now).add(days=days - 1)
-    n = 3
-    m = 2
+    shares = 3
+    threshold = 2
     policy = blockchain_alice.create_policy(blockchain_bob,
                                             label=random_label,
-                                            m=m, n=n,
-                                            value=n * periods * 100,
+                                            threshold=threshold,
+                                            shares=shares,
+                                            value=shares * periods * 100,
                                             expiration=expiration)
     return policy
 
@@ -277,8 +285,16 @@ def enacted_blockchain_policy(idle_blockchain_policy, blockchain_ursulas):
     # REST call happens here, as does population of TreasureMap.
     enacted_policy = idle_blockchain_policy.enact(network_middleware=network_middleware,
                                                   handpicked_ursulas=list(blockchain_ursulas))
-    enacted_policy.treasure_map_publisher.block_until_complete()
     return enacted_policy
+
+
+@pytest.fixture(scope="module")
+def blockchain_treasure_map(enacted_blockchain_policy, blockchain_bob):
+    """
+    The unencrypted treasure map corresponding to the one in `enacted_blockchain_policy`
+    """
+    yield blockchain_bob._decrypt_treasure_map(enacted_blockchain_policy.treasure_map,
+                                               enacted_blockchain_policy.publisher_verifying_key)
 
 
 @pytest.fixture(scope="function")
@@ -288,12 +304,13 @@ def random_blockchain_policy(testerchain, blockchain_alice, blockchain_bob, toke
     days = periods * (token_economics.hours_per_period // 24)
     now = testerchain.w3.eth.getBlock('latest').timestamp
     expiration = maya.MayaDT(now).add(days=days - 1)
-    n = 3
-    m = 2
+    shares = 3
+    threshold = 2
     policy = blockchain_alice.create_policy(blockchain_bob,
                                             label=random_label,
-                                            m=m, n=n,
-                                            value=n * periods * 100,
+                                            threshold=threshold,
+                                            shares=shares,
+                                            value=shares * periods * 100,
                                             expiration=expiration)
     return policy
 
@@ -306,7 +323,7 @@ def capsule_side_channel(enacted_federated_policy):
 
         def __call__(self):
             message = "Welcome to flippering number {}.".format(len(self.messages)).encode()
-            message_kit, _signature = self.enrico.encrypt_message(message)
+            message_kit = self.enrico.encrypt_message(message)
             self.messages.append((message_kit, self.enrico))
             if self.plaintext_passthrough:
                 self.plaintexts.append(message)
@@ -330,7 +347,7 @@ def capsule_side_channel_blockchain(enacted_blockchain_policy):
 
         def __call__(self):
             message = "Welcome to flippering number {}.".format(len(self.messages)).encode()
-            message_kit, _signature = self.enrico.encrypt_message(message)
+            message_kit = self.enrico.encrypt_message(message)
             self.messages.append((message_kit, self.enrico))
             if self.plaintext_passthrough:
                 self.plaintexts.append(message)
@@ -772,16 +789,6 @@ def funded_blockchain(testerchain, agency, token_economics, test_registry):
 
     # HERE YOU GO
     yield testerchain, deployer_address
-
-
-#
-# Re-Encryption
-#
-
-
-@pytest.fixture(scope='session')
-def mock_ursula_reencrypts():
-    return _mock_ursula_reencrypts
 
 
 @pytest.fixture(scope='session')

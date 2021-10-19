@@ -19,9 +19,7 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 from cryptography.hazmat.primitives import hashes
 
 # Policy component sizes
-HRAC_LENGTH = 16
 SIGNATURE_SIZE = 64
-EIP712_MESSAGE_SIGNATURE_SIZE = 65
 
 # Digest Lengths
 KECCAK_DIGEST_LENGTH = 32

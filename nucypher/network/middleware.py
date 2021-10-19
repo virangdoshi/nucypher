@@ -16,16 +16,18 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 
-import requests
 import socket
 import ssl
 import time
-from bytestring_splitter import VariableLengthBytestring
+import requests
+from eth_typing.evm import ChecksumAddress
+
+from nucypher.core import MetadataRequest
+
 from constant_sorrow.constants import CERTIFICATE_NOT_SAVED, EXEMPT_FROM_VERIFICATION
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
-from nucypher.crypto.splitters import cfrag_splitter, signature_splitter
 from nucypher.utilities.logging import Logger
 
 EXEMPT_FROM_VERIFICATION.bool_value(False)
@@ -124,8 +126,14 @@ class NucypherMiddlewareClient:
                 elif cleaned_response.status_code == 404:
                     m = f"While trying to {method_name} {args} ({kwargs}), server 404'd.  Response: {cleaned_response.content}"
                     raise RestMiddleware.NotFound(m)
+                elif cleaned_response.status_code == 402:
+                    # TODO: Use this as a hook to prompt Bob's payment for policy sponsorship
+                    # https://getyarn.io/yarn-clip/ce0d37ba-4984-4210-9a40-c9c9859a3164
+                    raise RestMiddleware.PaymentRequired(cleaned_response.content)
+                elif cleaned_response.status_code == 403:
+                    raise RestMiddleware.Unauthorized(cleaned_response.content)
                 else:
-                    return cleaned_response
+                    raise RestMiddleware.UnexpectedResponse(cleaned_response.content, status=cleaned_response.status_code)
             return cleaned_response
 
         return method_wrapper
@@ -155,6 +163,16 @@ class RestMiddleware:
         def __init__(self, reason, *args, **kwargs):
             self.reason = reason
             super().__init__(message=reason, status=400, *args, **kwargs)
+
+    class PaymentRequired(UnexpectedResponse):
+        """Raised for HTTP 402"""
+        def __init__(self, *args, **kwargs):
+            super().__init__(status=402, *args, **kwargs)
+
+    class Unauthorized(UnexpectedResponse):
+        """Raised for HTTP 403"""
+        def __init__(self, *args, **kwargs):
+            super().__init__(status=403, *args, **kwargs)
 
     def __init__(self, registry=None):
         self.client = self._client_class(registry)
@@ -192,13 +210,6 @@ class RestMiddleware:
                                     timeout=120)  # TODO: What is an appropriate timeout here?
         return response
 
-    def reencrypt(self, work_order):
-        ursula_rest_response = self.send_work_order_payload_to_ursula(ursula=work_order.ursula,
-                                                                      work_order_payload=work_order.payload())
-        splitter = cfrag_splitter + signature_splitter
-        cfrags_and_signatures = splitter.repeat(ursula_rest_response.content)
-        return cfrags_and_signatures
-
     def revoke_arrangement(self, ursula, revocation):
         # TODO: Implement revocation confirmations
         response = self.client.post(
@@ -208,31 +219,18 @@ class RestMiddleware:
         )
         return response
 
-    def get_treasure_map_from_node(self, node, map_identifier):
-        response = self.client.get(node_or_sprout=node,
-                                   path=f"treasure_map/{map_identifier}",
-                                   timeout=2)
-        return response
-
-    def put_treasure_map_on_node(self, node, map_payload):
-        response = self.client.post(node_or_sprout=node,
-                                    path=f"treasure_map/",
-                                    data=map_payload,
-                                    timeout=2)
-        return response
-
-    def send_work_order_payload_to_ursula(self, ursula: 'Ursula', work_order_payload: bytes):
+    def reencrypt(self, ursula: 'Ursula', reencryption_request_bytes: bytes):
         response = self.client.post(
             node_or_sprout=ursula,
             path=f"reencrypt",
-            data=work_order_payload,
+            data=reencryption_request_bytes,
             timeout=2
         )
         return response
 
     def check_rest_availability(self, initiator, responder):
         response = self.client.post(node_or_sprout=responder,
-                                    data=bytes(initiator),
+                                    data=bytes(initiator.metadata()),
                                     path="ping",
                                     timeout=6,  # Two round trips are expected
                                     )
@@ -240,30 +238,13 @@ class RestMiddleware:
 
     def get_nodes_via_rest(self,
                            node,
-                           announce_nodes=None,
-                           nodes_i_need=None,
-                           fleet_checksum=None):
-        if nodes_i_need:
-            # TODO: This needs to actually do something.  NRN
-            # Include node_ids in the request; if the teacher node doesn't know about the
-            # nodes matching these ids, then it will ask other nodes.
-            pass
+                           fleet_state_checksum: str,
+                           announce_nodes=None):
 
-        if fleet_checksum:
-            params = {'fleet': fleet_checksum}
-        else:
-            params = {}
-
-        if announce_nodes:
-            payload = bytes().join(bytes(VariableLengthBytestring(n)) for n in announce_nodes)
-            response = self.client.post(node_or_sprout=node,
-                                        path="node_metadata",
-                                        params=params,
-                                        data=payload,
-                                        )
-        else:
-            response = self.client.get(node_or_sprout=node,
-                                       path="node_metadata",
-                                       params=params)
-
+        request = MetadataRequest(fleet_state_checksum=fleet_state_checksum,
+                                  announce_nodes=announce_nodes)
+        response = self.client.post(node_or_sprout=node,
+                                    path="node_metadata",
+                                    data=bytes(request),
+                                    )
         return response

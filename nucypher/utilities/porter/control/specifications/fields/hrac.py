@@ -15,14 +15,22 @@
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-from nucypher.control.specifications.fields import Base64BytesRepresentation
-from nucypher.policy.orders import WorkOrder as WorkOrderClass
+from marshmallow import fields
+
+from nucypher.core import HRAC as HRACClass
+
+from nucypher.control.specifications.exceptions import InvalidInputData, InvalidNativeDataTypes
+from nucypher.control.specifications.fields.base import BaseField
 
 
-class WorkOrder(Base64BytesRepresentation):
-    def _serialize(self, value: WorkOrderClass, attr, obj, **kwargs):
-        return super()._serialize(value.payload(), attr, obj, **kwargs)
+class HRAC(BaseField, fields.String):
 
+    def _serialize(self, value, attr, obj, **kwargs):
+        return bytes(value).hex()
 
-class WorkOrderResult(Base64BytesRepresentation):
-    pass
+    def _deserialize(self, value, attr, data, **kwargs):
+        try:
+            hrac_bytes = bytes.fromhex(value)
+            return HRACClass.from_bytes(hrac_bytes)
+        except InvalidNativeDataTypes as e:
+            raise InvalidInputData(f"Could not convert input for {self.name} to a valid HRAC: {e}")

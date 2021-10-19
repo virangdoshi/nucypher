@@ -15,17 +15,17 @@
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-from base64 import b64decode
+from typing import Union, List
+
 import maya
-from typing import Union
+
+from nucypher.core import MessageKit, HRAC, EncryptedTreasureMap
 
 from nucypher.characters.base import Character
 from nucypher.characters.control.specifications import alice, bob, enrico
 from nucypher.control.interfaces import attach_schema, ControlInterface
-from nucypher.crypto.kits import UmbralMessageKit
 from nucypher.crypto.powers import DecryptingPower, SigningPower
 from nucypher.crypto.umbral_adapter import PublicKey
-from nucypher.crypto.utils import construct_policy_id
 from nucypher.network.middleware import RestMiddleware
 
 
@@ -39,11 +39,11 @@ class AliceInterface(CharacterPublicInterface):
 
     @attach_schema(alice.CreatePolicy)
     def create_policy(self,
-                      bob_encrypting_key: bytes,
-                      bob_verifying_key: bytes,
+                      bob_encrypting_key: PublicKey,
+                      bob_verifying_key: PublicKey,
                       label: bytes,
-                      m: int,
-                      n: int,
+                      threshold: int,
+                      shares: int,
                       expiration: maya.MayaDT,
                       value: int = None
                       ) -> dict:
@@ -55,8 +55,8 @@ class AliceInterface(CharacterPublicInterface):
         new_policy = self.implementer.create_policy(
             bob=bob,
             label=label,
-            m=m,
-            n=n,
+            threshold=threshold,
+            shares=shares,
             expiration=expiration,
             value=value
         )
@@ -71,11 +71,11 @@ class AliceInterface(CharacterPublicInterface):
 
     @attach_schema(alice.GrantPolicy)
     def grant(self,
-              bob_encrypting_key: bytes,
-              bob_verifying_key: bytes,
+              bob_encrypting_key: PublicKey,
+              bob_verifying_key: PublicKey,
               label: bytes,
-              m: int,
-              n: int,
+              threshold: int,
+              shares: int,
               expiration: maya.MayaDT,
               value: int = None,
               rate: int = None,
@@ -87,13 +87,11 @@ class AliceInterface(CharacterPublicInterface):
 
         new_policy = self.implementer.grant(bob=bob,
                                             label=label,
-                                            m=m,
-                                            n=n,
+                                            threshold=threshold,
+                                            shares=shares,
                                             value=value,
                                             rate=rate,
                                             expiration=expiration)
-
-        new_policy.treasure_map_publisher.block_until_success_is_reasonably_likely()
 
         response_data = {'treasure_map': new_policy.treasure_map,
                          'policy_encrypting_key': new_policy.public_key,
@@ -104,11 +102,11 @@ class AliceInterface(CharacterPublicInterface):
         return response_data
 
     @attach_schema(alice.Revoke)
-    def revoke(self, label: bytes, bob_verifying_key: bytes) -> dict:
+    def revoke(self, label: bytes, bob_verifying_key: PublicKey) -> dict:
 
         # TODO: Move deeper into characters
-        policy_id = construct_policy_id(label, bob_verifying_key)
-        policy = self.implementer.active_policies[policy_id]
+        policy_hrac = HRAC.derive(self.implementer.stamp.as_umbral_pubkey(), bob_verifying_key, label)
+        policy = self.implementer.active_policies[policy_hrac]
 
         receipt, failed_revocations = self.implementer.revoke(policy)
         if len(failed_revocations) > 0:
@@ -116,33 +114,19 @@ class AliceInterface(CharacterPublicInterface):
                 revocation, fail_reason = attempt
                 if fail_reason == RestMiddleware.NotFound:
                     del (failed_revocations[node_id])
-        if len(failed_revocations) <= (policy.n - policy.treasure_map.m + 1):
-            del (self.implementer.active_policies[policy_id])
+        if len(failed_revocations) <= (policy.shares - policy.threshold + 1):
+            del (self.implementer.active_policies[policy_hrac])
 
         response_data = {'failed_revocations': len(failed_revocations)}
         return response_data
 
     @attach_schema(alice.Decrypt)
-    def decrypt(self, label: bytes, message_kit: bytes) -> dict:
+    def decrypt(self, label: bytes, message_kit: MessageKit) -> dict:
         """
         Character control endpoint to allow Alice to decrypt her own data.
         """
-
-        from nucypher.characters.lawful import Enrico
-        policy_encrypting_key = self.implementer.get_policy_encrypting_key_from_label(label)
-
-        # TODO #846: May raise UnknownOpenSSLError and InvalidTag.
-        message_kit = UmbralMessageKit.from_bytes(message_kit)
-
-        enrico = Enrico.from_public_keys(
-            verifying_key=message_kit.sender_verifying_key,
-            policy_encrypting_key=policy_encrypting_key,
-            label=label
-        )
-
         plaintexts = self.implementer.decrypt_message_kit(
             message_kit=message_kit,
-            data_source=enrico,
             label=label
         )
 
@@ -161,61 +145,23 @@ class AliceInterface(CharacterPublicInterface):
 
 class BobInterface(CharacterPublicInterface):
 
-    @attach_schema(bob.JoinPolicy)
-    def join_policy(self, label: bytes, publisher_verifying_key: bytes):
-        """
-        Character control endpoint for joining a policy on the network.
-        """
-        self.implementer.join_policy(label=label, publisher_verifying_key=publisher_verifying_key)
-        response = {'policy_encrypting_key': 'OK'}  # FIXME
-        return response
-
-    @attach_schema(bob.Retrieve)
-    def retrieve(self,
-                 label: bytes,
-                 policy_encrypting_key: bytes,
-                 alice_verifying_key: bytes,
-                 message_kit: bytes,
-                 treasure_map: Union[bytes, str, 'TreasureMap'] = None):
+    @attach_schema(bob.RetrieveAndDecrypt)
+    def retrieve_and_decrypt(self,
+                             alice_verifying_key: PublicKey,
+                             message_kits: List[MessageKit],
+                             encrypted_treasure_map: EncryptedTreasureMap) -> dict:
         """
         Character control endpoint for re-encrypting and decrypting policy data.
         """
-        from nucypher.characters.lawful import Enrico
-
-        policy_encrypting_key = PublicKey.from_bytes(policy_encrypting_key)
-        alice_verifying_key = PublicKey.from_bytes(alice_verifying_key)
-        message_kit = UmbralMessageKit.from_bytes(message_kit)  # TODO #846: May raise UnknownOpenSSLError and InvalidTag.
-
-        enrico = Enrico.from_public_keys(verifying_key=message_kit.sender_verifying_key,
-                                         policy_encrypting_key=policy_encrypting_key,
-                                         label=label)
-
-        self.implementer.join_policy(label=label, publisher_verifying_key=alice_verifying_key)
-
-        if self.implementer.federated_only:
-            from nucypher.policy.maps import TreasureMap as _MapClass
-        else:
-            from nucypher.policy.maps import SignedTreasureMap as _MapClass
-
-        # TODO: This LBYL is ugly and fraught with danger.  NRN - #2751
-        if isinstance(treasure_map, bytes):
-            treasure_map = _MapClass.from_bytes(treasure_map)
-
-        if isinstance(treasure_map, str):
-            tmap_bytes = treasure_map.encode()
-            treasure_map = _MapClass.from_bytes(b64decode(tmap_bytes))
-
-        plaintexts = self.implementer.retrieve(message_kit,
-                                               enrico=enrico,
-                                               alice_verifying_key=alice_verifying_key,
-                                               label=label,
-                                               treasure_map=treasure_map)
+        plaintexts = self.implementer.retrieve_and_decrypt(message_kits,
+                                                           alice_verifying_key=alice_verifying_key,
+                                                           encrypted_treasure_map=encrypted_treasure_map)
 
         response_data = {'cleartexts': plaintexts}
         return response_data
 
     @attach_schema(bob.PublicKeys)
-    def public_keys(self):
+    def public_keys(self) -> dict:
         """
         Character control endpoint for getting Bob's encrypting and signing public keys
         """
@@ -228,11 +174,11 @@ class BobInterface(CharacterPublicInterface):
 class EnricoInterface(CharacterPublicInterface):
 
     @attach_schema(enrico.EncryptMessage)
-    def encrypt_message(self, plaintext: Union[str, bytes]):
+    def encrypt_message(self, plaintext: Union[str, bytes]) -> dict:
         """
         Character control endpoint for encrypting data for a policy and
         receiving the messagekit (and signature) to give to Bob.
         """
-        message_kit, signature = self.implementer.encrypt_message(plaintext=plaintext)
-        response_data = {'message_kit': message_kit, 'signature': signature}
+        message_kit = self.implementer.encrypt_message(plaintext=plaintext)
+        response_data = {'message_kit': message_kit}
         return response_data

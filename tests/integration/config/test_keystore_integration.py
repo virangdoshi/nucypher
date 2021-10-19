@@ -27,10 +27,10 @@ from flask import Flask
 from nucypher.characters.lawful import Alice, Bob, Ursula
 from nucypher.config.constants import TEMPORARY_DOMAIN
 from nucypher.crypto.keystore import Keystore
-from nucypher.crypto.powers import DecryptingPower, DelegatingPower
+from nucypher.crypto.powers import DecryptingPower, DelegatingPower, TLSHostingPower
 from nucypher.crypto.umbral_adapter import SecretKey, Signer
 from nucypher.datastore.datastore import Datastore
-from nucypher.network.server import TLSHostingPower, ProxyRESTServer
+from nucypher.network.server import ProxyRESTServer
 from nucypher.utilities.networking import LOOPBACK_ADDRESS
 from tests.constants import INSECURE_DEVELOPMENT_PASSWORD
 from tests.utils.matchers import IsType
@@ -57,7 +57,7 @@ def test_generate_alice_keystore(temp_dir_path):
     bob_pubkey = SecretKey.random().public_key()
     signer = Signer(SecretKey.random())
     delegating_pubkey_again, _kfrags = delegating_power.generate_kfrags(
-        bob_pubkey, signer, label, m=2, n=3
+        bob_pubkey, signer, label, threshold=2, shares=3
     )
 
     assert delegating_pubkey == delegating_pubkey_again

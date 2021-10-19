@@ -15,16 +15,8 @@
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-from nucypher.control.specifications.fields.base import Integer, PositiveInteger
+from nucypher.control.specifications.fields.base import Integer
 from nucypher.cli import types
-
-
-class M(PositiveInteger):
-    pass
-
-
-class N(PositiveInteger):
-    pass
 
 
 class Wei(Integer):

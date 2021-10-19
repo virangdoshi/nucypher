@@ -19,17 +19,17 @@ from base64 import b64encode, b64decode
 
 import maya
 import pytest
+
+from nucypher.core import MessageKit as MessageKitClass
+
 from nucypher.crypto.umbral_adapter import SecretKey, Signer
-
-from nucypher.crypto.kits import UmbralMessageKit as UmbralMessageKitClass
-
 from nucypher.characters.control.specifications.fields import (
     DateTime,
     FileField,
     Key,
-    UmbralMessageKit,
+    MessageKit,
     UmbralSignature,
-    TreasureMap
+    EncryptedTreasureMap
 )
 from nucypher.characters.lawful import Enrico
 from nucypher.control.specifications.exceptions import InvalidInputData
@@ -104,37 +104,32 @@ def test_key():
     assert serialized != bytes(other_umbral_pub_key).hex()
 
     deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == bytes(umbral_pub_key)
-    assert deserialized != bytes(other_umbral_pub_key)
-
-    field._validate(value=bytes(umbral_pub_key))
-    field._validate(value=bytes(other_umbral_pub_key))
+    assert deserialized == umbral_pub_key
+    assert deserialized != other_umbral_pub_key
 
     with pytest.raises(InvalidInputData):
-        field._validate(value=b"PublicKey")
+        field._deserialize(value=b"PublicKey".hex(), attr=None, data=None)
 
 
-def test_umbral_message_kit(enacted_federated_policy, federated_alice):
+def test_message_kit(enacted_federated_policy, federated_alice):
     # Setup
     enrico = Enrico.from_alice(federated_alice, label=enacted_federated_policy.label)
     message = 'this is a message'
     plaintext_bytes = bytes(message, encoding='utf-8')
-    message_kit, signature = enrico.encrypt_message(plaintext=plaintext_bytes)
-    message_kit_bytes = message_kit.to_bytes()
-    umbral_message_kit = UmbralMessageKitClass.from_bytes(message_kit_bytes)
+    message_kit = enrico.encrypt_message(plaintext=plaintext_bytes)
+    message_kit_bytes = bytes(message_kit)
+    message_kit = MessageKitClass.from_bytes(message_kit_bytes)
 
     # Test
-    field = UmbralMessageKit()
-    serialized = field._serialize(value=umbral_message_kit, attr=None, obj=None)
-    assert serialized == b64encode(umbral_message_kit.to_bytes()).decode()
+    field = MessageKit()
+    serialized = field._serialize(value=message_kit, attr=None, obj=None)
+    assert serialized == b64encode(bytes(message_kit)).decode()
 
     deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == b64decode(serialized)
-
-    field._validate(value=umbral_message_kit.to_bytes())
+    assert deserialized == message_kit
 
     with pytest.raises(InvalidInputData):
-        field._validate(value=b"UmbralMessageKit")
+        field._deserialize(value=b"MessageKit", attr=None, data=None)
 
 
 def test_umbral_signature():
@@ -164,14 +159,12 @@ def test_umbral_signature():
 def test_treasure_map(enacted_federated_policy):
     treasure_map = enacted_federated_policy.treasure_map
 
-    field = TreasureMap(federated_only=True)
+    field = EncryptedTreasureMap()
     serialized = field._serialize(value=treasure_map, attr=None, obj=None)
     assert serialized == b64encode(bytes(treasure_map)).decode()
 
     deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == bytes(treasure_map)
-
-    field._validate(value=bytes(treasure_map))
+    assert deserialized == treasure_map
 
     with pytest.raises(InvalidInputData):
-        field._validate(value=b"TreasureMap")
+        field._deserialize(value=b64encode(b"TreasureMap").decode(), attr=None, data=None)

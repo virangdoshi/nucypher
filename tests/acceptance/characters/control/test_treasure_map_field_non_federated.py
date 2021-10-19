@@ -18,21 +18,19 @@ from base64 import b64encode
 
 import pytest
 
-from nucypher.characters.control.specifications.fields import TreasureMap
+from nucypher.characters.control.specifications.fields import EncryptedTreasureMap
 from nucypher.control.specifications.exceptions import InvalidInputData
 
 
 def test_treasure_map(enacted_blockchain_policy):
     treasure_map = enacted_blockchain_policy.treasure_map
 
-    field = TreasureMap(federated_only=False)  # decentralized context
+    field = EncryptedTreasureMap()
     serialized = field._serialize(value=treasure_map, attr=None, obj=None)
     assert serialized == b64encode(bytes(treasure_map)).decode()
 
     deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == bytes(treasure_map)
-
-    field._validate(value=bytes(treasure_map))
+    assert deserialized == treasure_map
 
     with pytest.raises(InvalidInputData):
-        field._validate(value=b"TreasureMap")
+        field._deserialize(value=b64encode(b"TreasureMap").decode(), attr=None, data=None)
