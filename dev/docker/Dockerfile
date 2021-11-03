@@ -1,4 +1,4 @@
-FROM python:3.8.7
+FROM python:rc-buster
 ENV PYTHONUNBUFFERED 1
 ENV PYTHONPATH /code
 
