@@ -1,4 +1,4 @@
-FROM python:3.8.7-slim
+FROM python:3.10.0a6-slim
 
 # Update
 RUN apt update -y && apt upgrade -y
