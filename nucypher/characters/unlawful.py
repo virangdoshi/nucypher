@@ -22,10 +22,12 @@ from unittest.mock import patch
 
 from eth_tester.exceptions import ValidationError
 
+from nucypher.core import NodeMetadata
+
 from nucypher.blockchain.eth.signers.software import Web3Signer
 from nucypher.characters.lawful import Alice, Ursula
 from nucypher.config.constants import TEMPORARY_DOMAIN
-from nucypher.crypto.powers import CryptoPower, SigningPower, DecryptingPower, TransactingPower
+from nucypher.crypto.powers import CryptoPower, SigningPower
 from nucypher.exceptions import DevelopmentInstallationRequired
 
 
@@ -45,8 +47,8 @@ class Vladimir(Ursula):
     @classmethod
     def from_target_ursula(cls,
                            target_ursula: Ursula,
-                           claim_signing_key: bool = False,
-                           attach_transacting_key: bool = True
+                           substitute_verifying_key: bool = False,
+                           sign_metadata: bool = False,
                            ) -> 'Vladimir':
         """
         Sometimes Vladimir seeks to attack or imitate a *specific* target Ursula.
@@ -55,19 +57,14 @@ class Vladimir(Ursula):
         """
         try:
             from tests.utils.middleware import EvilMiddleWare
-            from tests.constants import MOCK_PROVIDER_URI
         except ImportError:
             raise DevelopmentInstallationRequired(importable_name='tests.utils.middleware.EvilMiddleWare')
         cls.network_middleware = EvilMiddleWare()
 
         crypto_power = CryptoPower(power_ups=target_ursula._default_crypto_powerups)
 
-        if claim_signing_key:
-            crypto_power.consume_power_up(SigningPower(public_key=target_ursula.stamp.as_umbral_pubkey()))
-
         blockchain = target_ursula.policy_agent.blockchain
-        if attach_transacting_key:
-            cls.attach_transacting_key(blockchain=blockchain)
+        cls.attach_transacting_key(blockchain=blockchain)
 
         db_filepath = tempfile.mkdtemp(prefix='Vladimir')
 
@@ -83,11 +80,30 @@ class Vladimir(Ursula):
                        worker_address=cls.fraud_address,
                        signer=Web3Signer(blockchain.client),
                        provider_uri=blockchain.provider_uri,
-                       ######### Asshole.
-                       timestamp=target_ursula._timestamp,
-                       interface_signature=target_ursula._interface_signature,
-                       #########
                        )
+
+        # Let's use the target's public info, and try to make some changes.
+        # We are going to mutate it, so make a copy (it is cached in the Ursula).
+        metadata = NodeMetadata.from_bytes(bytes(target_ursula.metadata()))
+        metadata_payload = metadata._metadata_payload
+
+        # Our basic replacement. We want to impersonate the target Ursula.
+        metadata_payload = metadata_payload._replace(public_address=vladimir.canonical_public_address)
+
+        # Use our own verifying key
+        if substitute_verifying_key:
+            metadata_payload = metadata_payload._replace(
+                verifying_key=vladimir.stamp.as_umbral_pubkey())
+
+        # Re-generate metadata signature using our signing key
+        if sign_metadata:
+            signature = vladimir.stamp(bytes(metadata_payload))
+        else:
+            signature = metadata.signature
+
+        # Put metadata back
+        vladimir._metadata = NodeMetadata(signature, metadata_payload)
+
         return vladimir
 
     @classmethod
@@ -118,28 +134,13 @@ class Amonia(Alice):
         alice_clone.__class__ = cls
         return alice_clone
 
-    @staticmethod
-    def enact_without_tabulating_responses(policy, network_middleware, arrangements, **_kwargs):
-        for ursula, kfrag in zip(arrangements, policy.kfrags):
-            arrangement = arrangements[ursula]
-            payload = policy._make_enactment_payload(kfrag)
-            message_kit = policy.publisher.encrypt_for(ursula, payload)
-
-            try:
-                network_middleware.enact_policy(ursula, bytes(message_kit))
-            except Exception as e:
-                # I don't care what went wrong - I will keep trying to ram arrangements through.
-                continue
-
     def grant_without_paying(self, *args, **kwargs):
-        """
-        I take what I want for free.
-        """
+        """I take what I want for free."""
 
         def what_do_you_mean_you_dont_tip(policy, *args, **kwargs):
             return b"He convinced me, gimme back my $"
 
-        with patch("nucypher.policy.policies.BlockchainPolicy._publish_to_blockchain", what_do_you_mean_you_dont_tip):
+        with patch("nucypher.policy.policies.BlockchainPolicy._publish", what_do_you_mean_you_dont_tip):
             return super().grant(*args, **kwargs)
 
     def circumvent_safegaurds_and_grant_without_paying(self, *args, **kwargs):
@@ -148,7 +149,7 @@ class Amonia(Alice):
 
         Can I grant for free if I change the client code to my liking?
         """
-        with patch("nucypher.policy.policies.Policy._enact_arrangements", self.enact_without_tabulating_responses):
+        with patch("nucypher.policy.policies.Policy._publish", self.grant_without_paying):
             return self.grant_without_paying(*args, **kwargs)
 
     def grant_while_paying_the_wrong_nodes(self,
@@ -172,6 +173,6 @@ class Amonia(Alice):
 
             return receipt['transactionHash']
 
-        with patch("nucypher.policy.policies.BlockchainPolicy._publish_to_blockchain",
+        with patch("nucypher.policy.policies.BlockchainPolicy._publish",
                    publish_wrong_payee_address_to_blockchain):
-            return super().grant(handpicked_ursulas=ursulas_to_trick_into_working_for_free, *args, **kwargs)
+            return super().grant(ursulas=ursulas_to_trick_into_working_for_free, *args, **kwargs)

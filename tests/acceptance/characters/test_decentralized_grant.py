@@ -21,7 +21,7 @@ import datetime
 import maya
 import pytest
 
-from nucypher.core import MessageKit
+from nucypher.core import EncryptedKeyFrag
 
 from nucypher.crypto.utils import keccak_digest
 
@@ -43,14 +43,13 @@ def test_decentralized_grant(blockchain_alice, blockchain_bob, blockchain_ursula
     treasure_map = blockchain_bob._decrypt_treasure_map(policy.treasure_map,
                                                         policy.publisher_verifying_key)
 
-    # The number of actually enacted arrangements is exactly equal to shares.
+    # The number of actual destinations is exactly equal to shares.
     assert len(treasure_map.destinations) == shares
 
-    # Let's look at the enacted arrangements.
+    # Let's look at the destinations.
     for ursula in blockchain_ursulas:
         if ursula.checksum_address in treasure_map.destinations:
             kfrag_kit = treasure_map.destinations[ursula.checksum_address]
 
             # TODO: try to decrypt?
-            # TODO: Use a new type for EncryptedKFrags?
-            assert isinstance(kfrag_kit, MessageKit)
+            assert isinstance(kfrag_kit, EncryptedKeyFrag)
