@@ -24,27 +24,25 @@ from typing import Callable, List, Optional, Set, Tuple, Union
 
 import maya
 import requests
-from constant_sorrow import constant_or_bytes
 from constant_sorrow.constants import (
     CERTIFICATE_NOT_SAVED,
     FLEET_STATES_MATCH,
-    NOT_SIGNED,
     NO_STORAGE_AVAILABLE,
+    NOT_SIGNED,
     RELAX,
 )
-from cryptography.x509 import Certificate, load_pem_x509_certificate
 from cryptography.hazmat.backends import default_backend
+from cryptography.x509 import Certificate, load_der_x509_certificate
 from eth_utils import to_checksum_address
+from nucypher_core import MetadataResponse, MetadataResponsePayload, NodeMetadata
+from nucypher_core.umbral import Signature
 from requests.exceptions import SSLError
 from twisted.internet import reactor, task
 from twisted.internet.defer import Deferred
 
-from nucypher.core import NodeMetadata, MetadataResponse
-
 from nucypher.acumen.nicknames import Nickname
 from nucypher.acumen.perception import FleetSensor
-from nucypher.blockchain.economics import EconomicsFactory
-from nucypher.blockchain.eth.agents import ContractAgency, StakingEscrowAgent
+from nucypher.blockchain.eth.agents import ContractAgency, PREApplicationAgent
 from nucypher.blockchain.eth.constants import NULL_ADDRESS
 from nucypher.blockchain.eth.networks import NetworksInventory
 from nucypher.blockchain.eth.registry import BaseContractRegistry
@@ -56,12 +54,10 @@ from nucypher.crypto.powers import (
     NoSigningPower,
     SigningPower,
 )
-from nucypher.crypto.signing import SignatureStamp, InvalidSignature
-from nucypher.crypto.umbral_adapter import Signature
-from nucypher.crypto.utils import recover_address_eip_191, verify_eip_191
+from nucypher.crypto.signing import InvalidSignature, SignatureStamp
 from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.middleware import RestMiddleware
-from nucypher.network.protocols import SuspiciousActivity, InterfaceInfo
+from nucypher.network.protocols import InterfaceInfo, SuspiciousActivity
 from nucypher.utilities.logging import Logger
 
 TEACHER_NODES = {
@@ -70,8 +66,9 @@ TEACHER_NODES = {
         'https://seeds.nucypher.network',
         'https://mainnet.nucypher.network:9151',
     ),
-    NetworksInventory.LYNX: ('https://lynx.nucypher.network:9151',),
-    NetworksInventory.IBEX: ('https://ibex.nucypher.network:9151',),
+    NetworksInventory.LYNX: ("https://lynx.nucypher.network:9151",),
+    NetworksInventory.IBEX: ("https://ibex.nucypher.network:9151",),
+    NetworksInventory.ORYX: ("https://oryx.nucypher.network:9151",),
 }
 
 
@@ -81,8 +78,9 @@ class NodeSprout:
     """
     verified_node = False
 
-    def __init__(self, node_metadata):
-        self._metadata = node_metadata
+    def __init__(self, metadata: NodeMetadata):
+        self._metadata = metadata
+        self._metadata_payload = metadata.payload
 
         # cached properties
         self._checksum_address = None
@@ -114,8 +112,12 @@ class NodeSprout:
     @property
     def checksum_address(self):
         if not self._checksum_address:
-            self._checksum_address = to_checksum_address(self._metadata.public_address)
+            self._checksum_address = to_checksum_address(self.canonical_address)
         return self._checksum_address
+
+    @property
+    def canonical_address(self):
+        return self._metadata_payload.staking_provider_address
 
     @property
     def nickname(self):
@@ -126,7 +128,7 @@ class NodeSprout:
     @property
     def rest_interface(self):
         if not self._rest_interface:
-            self._rest_interface = InterfaceInfo(self._metadata.host, self._metadata.port)
+            self._rest_interface = InterfaceInfo(self._metadata_payload.host, self._metadata_payload.port)
         return self._rest_interface
 
     def rest_url(self):
@@ -137,48 +139,44 @@ class NodeSprout:
 
     @property
     def verifying_key(self):
-        return self._metadata.verifying_key
+        return self._metadata_payload.verifying_key
 
     @property
     def encrypting_key(self):
-        return self._metadata.encrypting_key
+        return self._metadata_payload.encrypting_key
 
     @property
-    def decentralized_identity_evidence(self):
-        return self._metadata.decentralized_identity_evidence or NOT_SIGNED
-
-    @property
-    def public_address(self):
-        return self._metadata.public_address
+    def operator_signature_from_metadata(self):
+        return self._metadata_payload.operator_signature or NOT_SIGNED
 
     @property
     def timestamp(self):
-        return maya.MayaDT(self._metadata.timestamp_epoch)
+        return maya.MayaDT(self._metadata_payload.timestamp_epoch)
 
     @property
     def stamp(self) -> SignatureStamp:
-        return SignatureStamp(self._metadata.verifying_key)
+        return SignatureStamp(self._metadata_payload.verifying_key)
 
     @property
     def domain(self) -> str:
-        return self._metadata.domain
+        return self._metadata_payload.domain
 
     def finish(self):
         from nucypher.characters.lawful import Ursula
 
         crypto_power = CryptoPower()
-        crypto_power.consume_power_up(SigningPower(public_key=self._metadata.verifying_key))
-        crypto_power.consume_power_up(DecryptingPower(public_key=self._metadata.encrypting_key))
+        crypto_power.consume_power_up(SigningPower(public_key=self._metadata_payload.verifying_key))
+        crypto_power.consume_power_up(DecryptingPower(public_key=self._metadata_payload.encrypting_key))
 
         return Ursula(is_me=False,
                       crypto_power=crypto_power,
-                      rest_host=self._metadata.host,
-                      rest_port=self._metadata.port,
+                      rest_host=self._metadata_payload.host,
+                      rest_port=self._metadata_payload.port,
                       checksum_address=self.checksum_address,
-                      domain=self._metadata.domain,
+                      domain=self._metadata_payload.domain,
                       timestamp=self.timestamp,
-                      decentralized_identity_evidence=self.decentralized_identity_evidence,
-                      certificate=load_pem_x509_certificate(self._metadata.certificate_bytes, backend=default_backend()),
+                      operator_signature_from_metadata=self.operator_signature_from_metadata,
+                      certificate=load_der_x509_certificate(self._metadata_payload.certificate_der, backend=default_backend()),
                       metadata=self._metadata
                       )
 
@@ -322,7 +320,8 @@ class Learner:
             # Very slow, but provides useful info when trying to track down a stray Character.
             # Seems mostly useful for Bob or federated Ursulas, but perhaps useful for other Characters as well.
 
-            import inspect, os
+            import inspect
+            import os
             frames = inspect.stack(3)
             self._learning_task = task.LoopingCall(self.keep_learning_about_nodes, learner=self, frames=frames)
             self._init_frames = frames
@@ -474,7 +473,7 @@ class Learner:
                 # TODO: Bucket this node as having bad TLS info - maybe it's an update that hasn't fully propagated?  567
                 return False
 
-            except NodeSeemsToBeDown:
+            except RestMiddleware.Unreachable:
                 self.log.info("No Response while trying to verify node {}|{}".format(node.rest_interface, node))
                 # TODO: Bucket this node as "ghost" or something: somebody else knows about it, but we can't get to it.  567
                 return False
@@ -482,7 +481,7 @@ class Learner:
             except node.NotStaking:
                 # TODO: Bucket this node as inactive, and potentially safe to forget.  567
                 self.log.info(
-                    f'Staker:Worker {node.checksum_address}:{node.worker_address} is not actively staking, skipping.')
+                    f'StakingProvider:Operator {node.checksum_address}:{node.operator_address} is not actively staking, skipping.')
                 return False
 
             # TODO: What about InvalidNode?  (for that matter, any SuspiciousActivity)  1714, 567 too really
@@ -787,7 +786,7 @@ class Learner:
         if isinstance(self, Teacher):
             announce_nodes = [self.metadata()]
         else:
-            announce_nodes = None
+            announce_nodes = []
 
         unresponsive_nodes = set()
 
@@ -804,15 +803,14 @@ class Learner:
         # These except clauses apply to the current_teacher itself, not the learned-about nodes.
         except NodeSeemsToBeDown as e:
             unresponsive_nodes.add(current_teacher)
-            self.log.info(
-                f"Teacher {str(current_teacher)} is perhaps down:{e}.")  # FIXME: This was printing the node bytestring. Is this really necessary?  #1712
+            self.log.info(f"Teacher {current_teacher.seed_node_metadata(as_teacher_uri=True)} is unreachable: {e}.")
             return
         except current_teacher.InvalidNode as e:
             # Ugh.  The teacher is invalid.  Rough.
             # TODO: Bucket separately and report.
             unresponsive_nodes.add(current_teacher)  # This does nothing.
             self.known_nodes.mark_as(current_teacher.InvalidNode, current_teacher)
-            self.log.warn(f"Teacher {str(current_teacher)} is invalid (hex={bytes(current_teacher.metadata()).hex()}):{e}.")
+            self.log.warn(f"Teacher {str(current_teacher)} is invalid: {e}.")
             # TODO (#567): bucket the node as suspicious
             return
         except RuntimeError as e:
@@ -855,18 +853,18 @@ class Learner:
             return
 
         try:
-            metadata.verify(current_teacher.stamp.as_umbral_pubkey())
-        except InvalidSignature:
+            metadata_payload = metadata.verify(current_teacher.stamp.as_umbral_pubkey())
+        except Exception as e:
             # TODO (#567): bucket the node as suspicious
             self.log.warn(
-                f"Invalid signature received from teacher {current_teacher} for MetadataResponse {response.content}")
+                f"Failed to verify MetadataResponse from Teacher {current_teacher} ({e}): {response.content}")
             return
 
         # End edge case handling.
 
-        fleet_state_updated = maya.MayaDT(metadata.timestamp_epoch)
+        fleet_state_updated = maya.MayaDT(metadata_payload.timestamp_epoch)
 
-        if not metadata.this_node and not metadata.other_nodes:
+        if not metadata_payload.announce_nodes:
             # The teacher had the same fleet state
             self.known_nodes.record_remote_fleet_state(
                 current_teacher.checksum_address,
@@ -876,15 +874,7 @@ class Learner:
 
             return FLEET_STATES_MATCH
 
-        # Note: There was previously a version check here, but that required iterating through node bytestrings twice,
-        # so it has been removed.  When we create a new Ursula bytestring version, let's put the check
-        # somewhere more performant, like mature() or verify_node().
-
-        nodes = (
-            ([metadata.this_node] if metadata.this_node else []) +
-            (metadata.other_nodes if metadata.other_nodes else [])
-            )
-        sprouts = [NodeSprout(node) for node in nodes]
+        sprouts = [NodeSprout(node) for node in metadata_payload.announce_nodes]
 
         for sprout in sprouts:
             try:
@@ -913,11 +903,11 @@ class Learner:
                               f'{sprout} has no active stakes in the current period '
                               f'({self.staking_agent.get_current_period()}')
 
-            except sprout.InvalidWorkerSignature:
+            except sprout.InvalidOperatorSignature:
                 self.log.warn(f'Verification Failed - '
-                              f'{sprout} has an invalid wallet signature for {sprout.decentralized_identity_evidence}')
+                              f'{sprout} has an invalid wallet signature for {sprout.operator_signature_from_metadata}')
 
-            except sprout.UnbondedWorker:
+            except sprout.UnbondedOperator:
                 self.log.warn(f'Verification Failed - '
                               f'{sprout} is not bonded to a Staker.')
 
@@ -925,7 +915,11 @@ class Learner:
             # except sprout.Invalidsprout:
             #     self.log.warn(sprout.invalid_metadata_message.format(sprout))
 
-            except sprout.SuspiciousActivity:
+            except NodeSeemsToBeDown as e:
+                message = f"Node is unreachable: {sprout}. Full error: {e.__str__()} "
+                self.log.warn(message)
+
+            except SuspiciousActivity:
                 message = f"Suspicious Activity: Discovered sprout with bad signature: {sprout}." \
                           f"Propagated by: {current_teacher}"
                 self.log.warn(message)
@@ -963,7 +957,6 @@ class Teacher:
                  domain: str,  # TODO: Consider using a Domain type
                  certificate: Certificate,
                  certificate_filepath: Path,
-                 decentralized_identity_evidence=NOT_SIGNED,
                  ) -> None:
 
         self.domain = domain
@@ -974,14 +967,12 @@ class Teacher:
 
         self.certificate = certificate
         self.certificate_filepath = certificate_filepath
-        self.__decentralized_identity_evidence = constant_or_bytes(decentralized_identity_evidence)
 
         # Assume unverified
         self.verified_stamp = False
-        self.verified_worker = False
+        self.verified_operator = False
         self.verified_metadata = False
         self.verified_node = False
-        self.__worker_address = None
 
     class InvalidNode(SuspiciousActivity):
         """Raised when a node has an invalid characteristic - stamp, interface, or address."""
@@ -992,13 +983,13 @@ class Teacher:
     class StampNotSigned(InvalidStamp):
         """Raised when a node does not have a stamp signature when one is required for verification"""
 
-    class InvalidWorkerSignature(InvalidStamp):
+    class InvalidOperatorSignature(InvalidStamp):
         """Raised when a stamp fails signature verification or recovers an unexpected worker address"""
 
     class NotStaking(InvalidStamp):
         """Raised when a node fails verification because it is not currently staking"""
 
-    class UnbondedWorker(InvalidNode):
+    class UnbondedOperator(InvalidNode):
         """Raised when a node fails verification because it is not bonded to a Staker"""
 
     class WrongMode(TypeError):
@@ -1033,66 +1024,34 @@ class Teacher:
     def bytestring_of_known_nodes(self):
         # TODO (#1537): FleetSensor does metadata-to-byte conversion as well,
         # we may be able to cache the results there.
-        response = MetadataResponse.author(signer=self.stamp.as_umbral_signer(),
-                                           timestamp_epoch=self.known_nodes.timestamp.epoch,
-                                           this_node=self.metadata(),
-                                           other_nodes=[node.metadata() for node in self.known_nodes],
-                                           )
+        announce_nodes = [self.metadata()] + [node.metadata() for node in self.known_nodes]
+        response_payload = MetadataResponsePayload(timestamp_epoch=self.known_nodes.timestamp.epoch,
+                                                   announce_nodes=announce_nodes)
+        response = MetadataResponse(self.stamp.as_umbral_signer(), response_payload)
         return bytes(response)
 
-    #
-    # Stamp
-    #
-
-    def _stamp_has_valid_signature_by_worker(self) -> bool:
-        """
-        Off-chain Signature Verification of stamp signature by Worker's ETH account.
-        Note that this only "certifies" the stamp with the worker's account,
-        so it can be seen like a self certification. For complete assurance,
-        it's necessary to validate on-chain the Staker-Worker relation.
-        """
-        if self.__decentralized_identity_evidence is NOT_SIGNED:
-            return False
-        signature_is_valid = verify_eip_191(message=bytes(self.stamp),
-                                            signature=self.__decentralized_identity_evidence,
-                                            address=self.worker_address)
-        return signature_is_valid
-
-    def _worker_is_bonded_to_staker(self, registry: BaseContractRegistry) -> bool:
+    def _operator_is_bonded(self, registry: BaseContractRegistry) -> bool:
         """
         This method assumes the stamp's signature is valid and accurate.
-        As a follow-up, this checks that the worker is bonded to a staker, but it may be
-        the case that the "staker" isn't "staking" (e.g., all her tokens have been slashed).
+        As a follow-up, this checks that the worker is bonded to a staking provider, but it may be
+        the case that the "staking provider" isn't "staking" (e.g., all her tokens have been slashed).
         """
-        # Lazy agent get or create
-        staking_agent = ContractAgency.get_agent(StakingEscrowAgent, registry=registry)
+        application_agent = ContractAgency.get_agent(PREApplicationAgent, registry=registry)  # type: PREApplicationAgent
+        staking_provider_address = application_agent.get_staking_provider_from_operator(operator_address=self.operator_address)
+        if staking_provider_address == NULL_ADDRESS:
+            raise self.UnbondedOperator(f"Operator {self.operator_address} is not bonded")
+        return staking_provider_address == self.checksum_address
 
-        staker_address = staking_agent.get_staker_from_worker(worker_address=self.worker_address)
-        if staker_address == NULL_ADDRESS:
-            raise self.UnbondedWorker(f"Worker {self.worker_address} is not bonded")
-        return staker_address == self.checksum_address
-
-    def _staker_is_really_staking(self, registry: BaseContractRegistry) -> bool:
+    def _staking_provider_is_really_staking(self, registry: BaseContractRegistry, eth_provider_uri: Optional[str] = None) -> bool:
         """
         This method assumes the stamp's signature is valid and accurate.
-        As a follow-up, this checks that the staker is, indeed, staking.
+        As a follow-up, this checks that the staking provider is, indeed, staking.
         """
-        # Lazy agent get or create
-        staking_agent = ContractAgency.get_agent(StakingEscrowAgent, registry=registry)  # type: StakingEscrowAgent
-
-        try:
-            economics = EconomicsFactory.get_economics(registry=registry)
-        except Exception:
-            raise  # TODO: Get StandardEconomics  NRN
-
-        min_stake = economics.minimum_allowed_locked
-
-        stake_current_period = staking_agent.get_locked_tokens(staker_address=self.checksum_address, periods=0)
-        stake_next_period = staking_agent.get_locked_tokens(staker_address=self.checksum_address, periods=1)
-        is_staking = max(stake_current_period, stake_next_period) >= min_stake
+        application_agent = ContractAgency.get_agent(PREApplicationAgent, registry=registry, eth_provider_uri=eth_provider_uri)  # type: PREApplicationAgent
+        is_staking = application_agent.is_authorized(staking_provider=self.checksum_address)  # checksum address here is staking provider
         return is_staking
 
-    def validate_worker(self, registry: BaseContractRegistry = None) -> None:
+    def validate_operator(self, registry: BaseContractRegistry = None, eth_provider_uri: Optional[str] = None) -> None:
 
         # Federated
         if self.federated_only:
@@ -1104,38 +1063,41 @@ class Teacher:
         # Decentralized
         else:
 
-            # Off-chain signature verification
-            if not self._stamp_has_valid_signature_by_worker():
-                message = f"Invalid signature {self.__decentralized_identity_evidence.hex()} " \
-                          f"from worker {self.worker_address} for stamp {bytes(self.stamp).hex()} "
-                raise self.InvalidWorkerSignature(message)
+            # Try to derive the worker address if it hasn't been derived yet.
+            try:
+                # TODO: This is overtly implicit
+                _operator_address = self.operator_address
+            except Exception as e:
+                raise self.InvalidOperatorSignature(str(e)) from e
+            self.verified_stamp = True  # TODO: Does this belong here?
 
             # On-chain staking check, if registry is present
             if registry:
-                if not self._worker_is_bonded_to_staker(registry=registry):  # <-- Blockchain CALL
-                    message = f"Worker {self.worker_address} is not bonded to staker {self.checksum_address}"
+
+                if not self._operator_is_bonded(registry=registry):  # <-- Blockchain CALL
+                    message = f"Operator {self.operator_address} is not bonded to staking provider {self.checksum_address}"
                     self.log.debug(message)
-                    raise self.UnbondedWorker(message)
+                    raise self.UnbondedOperator(message)
 
-                if self._staker_is_really_staking(registry=registry):  # <-- Blockchain CALL
-                    self.verified_worker = True
+                if self._staking_provider_is_really_staking(registry=registry, eth_provider_uri=eth_provider_uri):  # <-- Blockchain CALL
+                    self.log.info(f'Verified operator {self}')
+                    self.verified_operator = True
                 else:
-                    raise self.NotStaking(f"Staker {self.checksum_address} is not staking")
+                    raise self.NotStaking(f"{self.checksum_address} is not staking")
 
-            self.verified_stamp = True
+            else:
+                self.log.info('No registry provided for staking verification.')
 
     def validate_metadata_signature(self) -> bool:
-        """
-        Checks that the interface info is valid for this node's canonical address.
-        """
-        metadata_is_valid = self._metadata.verify()
+        """Checks that the interface info is valid for this node's canonical address."""
+        metadata_is_valid = self.metadata().verify()
         self.verified_metadata = metadata_is_valid
         if metadata_is_valid:
             return True
         else:
             raise self.InvalidNode("Metadata signature is invalid")
 
-    def validate_metadata(self, registry: BaseContractRegistry = None):
+    def validate_metadata(self, registry: BaseContractRegistry = None, eth_provider_uri: Optional[str] = None):
 
         # Verify the metadata signature
         if not self.verified_metadata:
@@ -1147,7 +1109,7 @@ class Teacher:
 
         # Offline check of valid stamp signature by worker
         try:
-            self.validate_worker(registry=registry)
+            self.validate_operator(registry=registry, eth_provider_uri=eth_provider_uri)
         except self.WrongMode:
             if bool(registry):
                 raise
@@ -1155,6 +1117,7 @@ class Teacher:
     def verify_node(self,
                     network_middleware_client,
                     registry: BaseContractRegistry = None,
+                    eth_provider_uri: Optional[str] = None,
                     certificate_filepath: Optional[Path] = None,
                     force: bool = False
                     ) -> bool:
@@ -1176,7 +1139,7 @@ class Teacher:
             self.verified_metadata = False
             self.verified_node = False
             self.verified_stamp = False
-            self.verified_worker = False
+            self.verified_operator = False
 
         if self.verified_node:
             return True
@@ -1186,7 +1149,7 @@ class Teacher:
                            "on-chain Staking verification will not be performed.")
 
         # This is both the stamp's client signature and interface metadata check; May raise InvalidNode
-        self.validate_metadata(registry=registry)
+        self.validate_metadata(registry=registry, eth_provider_uri=eth_provider_uri)
 
         # The node's metadata is valid; let's be sure the interface is in order.
         if not certificate_filepath:
@@ -1195,15 +1158,17 @@ class Teacher:
             certificate_filepath = self.certificate_filepath
 
         response_data = network_middleware_client.node_information(host=self.rest_interface.host,
-                                                                   port=self.rest_interface.port,
-                                                                   certificate_filepath=certificate_filepath)
+                                                                   port=self.rest_interface.port)
 
-        sprout = NodeSprout(NodeMetadata.from_bytes(response_data))
+        try:
+            sprout = self.from_metadata_bytes(response_data)
+        except Exception as e:
+            raise self.InvalidNode(str(e))
 
         verifying_keys_match = sprout.verifying_key == self.public_keys(SigningPower)
         encrypting_keys_match = sprout.encrypting_key == self.public_keys(DecryptingPower)
-        addresses_match = sprout.public_address == self.canonical_public_address
-        evidence_matches = sprout.decentralized_identity_evidence == self.__decentralized_identity_evidence
+        addresses_match = sprout.checksum_address == self.checksum_address
+        evidence_matches = sprout.operator_signature_from_metadata == self.operator_signature_from_metadata
 
         if not all((encrypting_keys_match, verifying_keys_match, addresses_match, evidence_matches)):
             # Failure
@@ -1218,16 +1183,3 @@ class Teacher:
         else:
             # Success
             self.verified_node = True
-
-    @property
-    def decentralized_identity_evidence(self):
-        return self.__decentralized_identity_evidence
-
-    @property
-    def worker_address(self):
-        if not self.__worker_address and not self.federated_only:
-            if self.decentralized_identity_evidence is NOT_SIGNED:
-                raise self.StampNotSigned  # TODO: Find a better exception  NRN
-            self.__worker_address = recover_address_eip_191(message=bytes(self.stamp),
-                                                            signature=self.decentralized_identity_evidence)
-        return self.__worker_address

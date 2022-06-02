@@ -2,6 +2,99 @@
 CLI Reference
 ==============
 
+Ursula
+------
+
+"Ursula the Untrusted" PRE Re-encryption node management commands.
+
+
+.. code:: bash
+
+    (nucypher)$ nucypher ursula ACTION [OPTIONS]
+
+
+**Ursula Command Actions**
+
+
++--------------------------+---------------------------------------------------------------------+
+| Action                   | Description                                                         |
++==========================+=====================================================================+
+| ``init``                 | Create a brand new persistent Ursula.                               |
++--------------------------+---------------------------------------------------------------------+
+| ``config``               | View and optionally update an existing Ursula's configuration.      |
++--------------------------+---------------------------------------------------------------------+
+| ``destroy``              | Delete existing Ursula's configuration.                             |
++--------------------------+---------------------------------------------------------------------+
+| ``forget``               | Delete all stored peer metadata.                                    |
++--------------------------+---------------------------------------------------------------------+
+| ``save-metadata``        | Manually write node metadata to disk without running.               |
++--------------------------+---------------------------------------------------------------------+
+| ``run``                  | Start Ursula.                                                       |
++--------------------------+---------------------------------------------------------------------+
+
+
+Bond
+----
+
+Bond an Operator to a Staking Provider. The Staking Provider must be authorized to use the PREApplication.
+
+.. code:: bash
+
+    (nucypher)$ nucypher bond [OPTIONS]
+
+
+Unbond
+------
+
+Unbonds an operator from an authorized Staking Provider.
+
+.. code:: bash
+
+    (nucypher)$ nucypher unbond [OPTIONS]
+
+
+Enrico
+-------
+
+"Enrico the Encryptor" management commands.
+
+
+.. code:: bash
+
+    (nucypher)$ nucypher enrico ACTION [OPTIONS]
+
+**Enrico Command Actions**
+
+
++--------------------------+-------------------------------------------------------------------------------+
+| Action                   | Description                                                                   |
++==========================+===============================================================================+
+| ``encrypt``              | Encrypt a message under a given policy public key.                            |
++--------------------------+-------------------------------------------------------------------------------+
+| ``run``                  | Start Enrico's HTTP controller.                                               |
++--------------------------+-------------------------------------------------------------------------------+
+
+
+Status
+------
+
+Echo a snapshot of live PRE Application metadata.
+
+.. code:: bash
+
+    (nucypher)$ nucypher status ACTION [OPTIONS]
+
+
+**Status Command Actions**
+
+
++--------------------------+---------------------------------------------------------------------+
+| Action                   | Description                                                         |
++==========================+=====================================================================+
+| ``events``               | Show events associated to PRE Application contracts.                |
++--------------------------+---------------------------------------------------------------------+
+
+
 Alice
 -----
 
@@ -38,6 +131,7 @@ Alice
 | ``run``                  | Start Alice's HTTP controller.                                                |
 +--------------------------+-------------------------------------------------------------------------------+
 
+
 Bob
 ---
 
@@ -68,212 +162,3 @@ Bob
 +--------------------------+-------------------------------------------------------------------------------+
 | ``run``                  | Start Bob's HTTP controller.                                                  |
 +--------------------------+-------------------------------------------------------------------------------+
-
-
-Enrico
--------
-
-"Enrico the Encryptor" management commands.
-
-
-.. code:: bash
-
-    (nucypher)$ nucypher enrico ACTION [OPTIONS]
-
-**Enrico Command Actions**
-
-
-+--------------------------+-------------------------------------------------------------------------------+
-| Action                   | Description                                                                   |
-+==========================+===============================================================================+
-| ``encrypt``              | Encrypt a message under a given policy public key.                            |
-+--------------------------+-------------------------------------------------------------------------------+
-| ``run``                  | Start Enrico's HTTP controller.                                               |
-+--------------------------+-------------------------------------------------------------------------------+
-
-
-Stake
------
-
-Manage stakes and other staker-related operations.
-
-.. code:: bash
-
-    (nucypher)$ nucypher stake ACTION [OPTIONS]
-
-
-**Stake Command Actions**
-
-+----------------------+-------------------------------------------------------------------------------+
-| Action               |  Description                                                                  |
-+======================+===============================================================================+
-|  ``init-stakeholder``| Create a new stakeholder configuration                                        |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``create``          | Initialize NuCypher stakes (used with ``--value`` and ``--duration``)         |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``increase``        | Increase an existing stake's value                                            |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``list``            | List active stakes for current stakeholder                                    |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``accounts``        | Show ETH and NU balances for stakeholder's accounts                           |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``bond-worker``     | Bond a worker to a staker                                                     |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``unbond-worker``   | Unbond worker currently bonded to a staker                                    |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``divide``          | Create a new stake from part of an existing one                               |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``restake``         | Manage automatic reward re-staking                                            |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``rewards``         | Preview and withdraw staking rewards and fees                                 |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``prolong``         | Prolong an existing stake's duration                                          |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``winddown``        | Manage winding down of stakes                                                 |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``snapshots``       | Manage taking snapshots                                                       |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``mint``            | Mint last portion of reward                                                   |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``merge``           | Merge two stakes into one                                                     |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``remove-inactive`` | Remove inactive stake                                                         |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``events``          | View StakingEscrow blockchain events associated with a staker                 |
-+----------------------+-------------------------------------------------------------------------------+
-
-**Stake Command Options**
-
-+-----------------+--------------------------------------------+
-| Option          |  Description                               |
-+=================+============================================+
-|  ``--value``    | Stake value (optional)                     |
-+-----------------+--------------------------------------------+
-|  ``--duration`` | Stake duration of extension (optional)     |
-+-----------------+--------------------------------------------+
-|  ``--index``    | Stake index (optional)                     |
-+-----------------+--------------------------------------------+
-
-**Re-stake Command Options**
-
-+-------------------------+---------------------------------------------+
-| Option                  |  Description                                |
-+=========================+=============================================+
-|  ``--enable``           | Enable re-staking                           |
-+-------------------------+---------------------------------------------+
-|  ``--disable``          | Disable re-staking                          |
-+-------------------------+---------------------------------------------+
-|  ``--lock-until``       | Enable re-staking lock until release period |
-+-------------------------+---------------------------------------------+
-
-**Stake Rewards Command Actions**
-
-+----------------------+-------------------------------------------------------------------------------+
-| Action               |  Description                                                                  |
-+======================+===============================================================================+
-|  ``show``            | Show available and historical staking rewards                                 |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``withdraw``        | Withdraw unlocked tokens and fees from the contract to your wallet            |
-+----------------------+-------------------------------------------------------------------------------+
-
-Ursula
-------
-
-"Ursula the Untrusted" PRE Re-encryption node management commands.
-
-
-.. code:: bash
-
-    (nucypher)$ nucypher ursula ACTION [OPTIONS]
-
-
-**Ursula Command Actions**
-
-
-+--------------------------+---------------------------------------------------------------------+
-| Action                   | Description                                                         |
-+==========================+=====================================================================+
-| ``init``                 | Create a brand new persistent Bob.                                  |
-+--------------------------+---------------------------------------------------------------------+
-| ``config``               | View and optionally update an existing Ursula's configuration.      |
-+--------------------------+---------------------------------------------------------------------+
-| ``destroy``              | Delete existing Bob's configuration.                                |
-+--------------------------+---------------------------------------------------------------------+
-| ``forget``               | Delete all stored peer metadata.                                    |
-+--------------------------+---------------------------------------------------------------------+
-| ``save-metadata``        | Manually write node metadata to disk without running.               |
-+--------------------------+---------------------------------------------------------------------+
-| ``run``                  | Start Ursula.                                                       |
-+--------------------------+---------------------------------------------------------------------+
-
-
-Cloudworkers
-------------
-
-Manage worker and other staker-related operations on cloud infrastructure.
-
-.. code:: bash
-
-    (nucypher)$ nucypher cloudworkers ACTION [OPTIONS]
-
-**Cloudworkers Command Actions**
-
-+----------------------+-------------------------------------------------------------------------------+
-| Action               |  Description                                                                  |
-+======================+===============================================================================+
-|  ``up``              | Creates and deploys hosts for all active local stakers.                       |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``create``          | Creates and deploys the given number of hosts independent of stakes           |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``add``             | Add an existing host to be managed by cloudworkers CLI tools                  |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``add_for_stake``   | Add an existing host to be managed for a specified local staker address       |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``deploy``          | Install and run Ursula on existing managed hosts.                             |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``update``          | Update or manage existing installed Ursula.                                   |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``destroy``         | Shut down and cleanup resources deployed on AWS or Digital Ocean              |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``stop``            | Stop the selected nodes.                                                      |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``status``          | Prints a formatted status of selected managed hosts.                          |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``logs``            | Download and display the accumulated stdout logs of selected hosts            |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``backup``          | Download local copies of critical data from selected installed Ursulas        |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``restore``         | Reconstitute and deploy an operating Ursula from backed up data               |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``list_hosts``      | Print local nicknames of all managed hosts under a given namespace            |
-+----------------------+-------------------------------------------------------------------------------+
-|  ``list_namespaces`` | Print namespaces under a given network                                        |
-+----------------------+-------------------------------------------------------------------------------+
-
-
-Status
-------
-
-Echo a snapshot of live NuCypher Network metadata.
-
-.. code:: bash
-
-    (nucypher)$ nucypher status ACTION [OPTIONS]
-
-
-**Status Command Actions**
-
-
-+--------------------------+---------------------------------------------------------------------+
-| Action                   | Description                                                         |
-+==========================+=====================================================================+
-| ``events``               | Show events associated to NuCypher contracts.                       |
-+--------------------------+---------------------------------------------------------------------+
-| ``fee-range``            | Provide information on the global fee range.                        |
-+--------------------------+---------------------------------------------------------------------+
-| ``locked-tokens``        | Display a graph of the number of locked tokens over time.           |
-+--------------------------+---------------------------------------------------------------------+
-| ``network``              | Overall information of the NuCypher Network.                        |
-+--------------------------+---------------------------------------------------------------------+
-| ``stakers``              | Show relevant information about stakers.                            |
-+--------------------------+---------------------------------------------------------------------+

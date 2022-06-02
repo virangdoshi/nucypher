@@ -12,11 +12,12 @@ constant-sorrow = ">=0.1.0a9"
 bytestring-splitter = ">=2.4.0"
 hendrix = ">=3.4"
 lmdb = "*"
-umbral = ">=0.3"
+nucypher-core = ">=0.2"
 # Cryptography
 pyopenssl = "*"
 cryptography = ">=3.2"
 pysha3="*"
+pynacl= ">=1.4.0"
 # Utilities
 maya = "*"
 tzlocal = "==2.1"
@@ -28,25 +29,26 @@ trezor = "*"
 # Web
 requests = "*"
 flask = "*"
+# 2.1.0 removed `JSONWebSignatureSerializer`, which `flask_httpasswd` depends on
+# (and it does not cap the version of `itsdangerous` itself)
+itsdangerous = "<2.1.0"
+jinja2 = "<3.1.0"
 # Third-Party Ethereum
 py-evm = "*"
 eth-tester = "*"
-coincurve = "*"
-web3 = "<=5.12.3"
-eth-utils = "<1.10"
-py-geth = "*"
+web3 = "*"
+eth-utils = "*"
 # CLI / Configuration
 appdirs = "*"
 click = ">=7.0"
 colorama = "*"
 tabulate = "*"
-# Felix
-flask_sqlalchemy = "*"
-sqlalchemy = "*"
 
 [dev-packages]
 # Pytest
-pytest = "*"
+# pytest==7 causes problems with autouse mocks and config in `.circleci` folder.
+# See https://github.com/pytest-dev/pytest/issues/9703
+pytest = "<7"
 pytest-xdist = "*"
 pytest-twisted = "*"
 pytest-cov = "*"
@@ -59,7 +61,6 @@ pyflakes = "*"
 bandit = "*"
 mypy = "*"
 coverage = "*"
-# Develop & Deploy
 py-solc-x = "==0.10.1"
 
 [scripts]

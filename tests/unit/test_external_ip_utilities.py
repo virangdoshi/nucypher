@@ -14,14 +14,20 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
+from pathlib import Path
 
 import pytest
+from eth_utils import to_checksum_address
+from nucypher_core import NodeMetadata, NodeMetadataPayload
+from nucypher_core.umbral import SecretKey, Signer
 
 from nucypher.acumen.perception import FleetSensor
 from nucypher.characters.lawful import Ursula
+from nucypher.crypto.tls import generate_self_signed_certificate
 from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.middleware import NucypherMiddlewareClient
 from nucypher.network.nodes import TEACHER_NODES
+from nucypher.network.protocols import InterfaceInfo
 from nucypher.utilities.networking import (
     determine_external_ip_address,
     get_external_ip_from_centralized_source,
@@ -33,12 +39,14 @@ from nucypher.utilities.networking import (
 from tests.constants import MOCK_IP_ADDRESS
 
 MOCK_NETWORK = 'holodeck'
+MOCK_PORT = 1111
 
 
 class Dummy:  # Teacher
 
-    def __init__(self, checksum_address):
-        self.checksum_address = checksum_address
+    def __init__(self, canonical_address):
+        self.canonical_address = canonical_address
+        self.checksum_address = to_checksum_address(canonical_address)
         self.certificate_filepath = None
         self.domain = MOCK_NETWORK
 
@@ -60,8 +68,28 @@ class Dummy:  # Teacher
     def rest_url(self):
         return MOCK_IP_ADDRESS
 
+    @property
+    def rest_interface(self):
+        return InterfaceInfo(host=MOCK_IP_ADDRESS, port=MOCK_PORT)
+
     def metadata(self):
-        return self.checksum_address.encode()
+        signer = Signer(SecretKey.random())
+
+        # A dummy signature with the recovery byte
+        dummy_signature = bytes(signer.sign(b'whatever')) + b'\x00'
+
+        payload = NodeMetadataPayload(staking_provider_address=self.canonical_address,
+                                      domain=':dummy:',
+                                      timestamp_epoch=0,
+                                      operator_signature=dummy_signature,
+                                      verifying_key=signer.verifying_key(),
+                                      encrypting_key=SecretKey.random().public_key(),
+                                      certificate_der=b'not a certificate',
+                                      host=MOCK_IP_ADDRESS,
+                                      port=MOCK_PORT,
+                                      )
+        return NodeMetadata(signer=signer,
+                            payload=payload)
 
 
 @pytest.fixture(autouse=True)
@@ -73,12 +101,14 @@ def mock_requests(mocker):
 
 @pytest.fixture(autouse=True)
 def mock_client(mocker):
+    cert, pk = generate_self_signed_certificate(host=MOCK_IP_ADDRESS)
+    mocker.patch.object(NucypherMiddlewareClient, 'get_certificate', return_value=(cert, Path()))
     yield mocker.patch.object(NucypherMiddlewareClient, 'invoke_method', return_value=Dummy.GoodResponse)
 
 
 @pytest.fixture(autouse=True)
 def mock_default_teachers(mocker):
-    teachers = {MOCK_NETWORK: (MOCK_IP_ADDRESS, )}
+    teachers = {MOCK_NETWORK: (f"{MOCK_IP_ADDRESS}:{MOCK_PORT}", )}
     mocker.patch.dict(TEACHER_NODES, teachers, clear=True)
 
 
@@ -97,7 +127,7 @@ def test_get_external_ip_from_empty_known_nodes(mock_requests):
 
 def test_get_external_ip_from_known_nodes_with_one_known_node(mock_requests):
     sensor = FleetSensor(domain=MOCK_NETWORK)
-    sensor.record_node(Dummy('0xdeadbeef'))
+    sensor.record_node(Dummy(b'deadbeefdeadbeefdead'))
     sensor.record_fleet_state()
     assert len(sensor) == 1
     get_external_ip_from_known_nodes(known_nodes=sensor)
@@ -110,9 +140,9 @@ def test_get_external_ip_from_known_nodes(mock_client):
     # Setup FleetSensor
     sensor = FleetSensor(domain=MOCK_NETWORK)
     sample_size = 3
-    sensor.record_node(Dummy('0xdeadbeef'))
-    sensor.record_node(Dummy('0xdeadllama'))
-    sensor.record_node(Dummy('0xdeadmouse'))
+    sensor.record_node(Dummy(b'deadbeefdeadbeefdead'))
+    sensor.record_node(Dummy(b'deadllamadeadllamade'))
+    sensor.record_node(Dummy(b'deadmousedeadmousede'))
     sensor.record_fleet_state()
     assert len(sensor) == sample_size
 
@@ -132,14 +162,14 @@ def test_get_external_ip_from_known_nodes_client(mocker, mock_client):
     # Setup FleetSensor
     sensor = FleetSensor(domain=MOCK_NETWORK)
     sample_size = 3
-    sensor.record_node(Dummy('0xdeadbeef'))
-    sensor.record_node(Dummy('0xdeadllama'))
-    sensor.record_node(Dummy('0xdeadmouse'))
+    sensor.record_node(Dummy(b'deadbeefdeadbeefdead'))
+    sensor.record_node(Dummy(b'deadllamadeadllamade'))
+    sensor.record_node(Dummy(b'deadmousedeadmousede'))
     sensor.record_fleet_state()
     assert len(sensor) == sample_size
 
     # Setup HTTP Client
-    mocker.patch.object(Ursula, 'from_teacher_uri', return_value=Dummy('0xdeadpork'))
+    mocker.patch.object(Ursula, 'from_teacher_uri', return_value=Dummy(b'deadporkdeadporkdead'))
     teacher_uri = TEACHER_NODES[MOCK_NETWORK][0]
 
     get_external_ip_from_known_nodes(known_nodes=sensor, sample_size=sample_size)
@@ -162,7 +192,7 @@ def test_get_external_ip_from_default_teacher(mocker, mock_client, mock_requests
 
     mock_client.return_value = Dummy.GoodResponse
     teacher_uri = TEACHER_NODES[MOCK_NETWORK][0]
-    mocker.patch.object(Ursula, 'from_teacher_uri', return_value=Dummy('0xdeadbeef'))
+    mocker.patch.object(Ursula, 'from_teacher_uri', return_value=Dummy(b'deadbeefdeadbeefdead'))
 
     # "Success"
     ip = get_external_ip_from_default_teacher(network=MOCK_NETWORK)
@@ -195,7 +225,7 @@ def test_get_external_ip_cascade_failure(mocker, mock_requests):
     third = mocker.patch('nucypher.utilities.networking.get_external_ip_from_centralized_source', return_value=None)
 
     sensor = FleetSensor(domain=MOCK_NETWORK)
-    sensor.record_node(Dummy('0xdeadbeef'))
+    sensor.record_node(Dummy(b'deadbeefdeadbeefdead'))
     sensor.record_fleet_state()
 
     with pytest.raises(UnknownIPAddress, match='External IP address detection failed'):

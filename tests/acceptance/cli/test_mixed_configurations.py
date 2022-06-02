@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from nucypher.blockchain.eth.actors import Worker
+from nucypher.blockchain.eth.actors import Operator
 from nucypher.cli.main import nucypher_cli
-from nucypher.config.characters import AliceConfiguration, FelixConfiguration, UrsulaConfiguration
+from nucypher.config.characters import AliceConfiguration, UrsulaConfiguration
 from nucypher.config.constants import (
     NUCYPHER_ENVVAR_KEYSTORE_PASSWORD,
     TEMPORARY_DOMAIN,
@@ -37,7 +37,8 @@ from tests.constants import (
     MOCK_CUSTOM_INSTALLATION_PATH,
     MOCK_IP_ADDRESS,
     MOCK_IP_ADDRESS_2,
-    TEST_PROVIDER_URI
+    TEST_ETH_PROVIDER_URI,
+    TEST_POLYGON_PROVIDER_URI
 )
 
 
@@ -77,7 +78,7 @@ def test_coexisting_configurations(click_runner,
 
     # Parse node addresses
     # TODO: Is testerchain & Full contract deployment needed here (causes massive slowdown)?
-    alice, ursula, another_ursula, felix, staker, *all_yall = testerchain.unassigned_accounts
+    alice, ursula, another_ursula, staking_provider, *all_yall = testerchain.unassigned_accounts
 
     envvars = {NUCYPHER_ENVVAR_KEYSTORE_PASSWORD: INSECURE_DEVELOPMENT_PASSWORD,
                NUCYPHER_ENVVAR_ALICE_ETH_PASSWORD: INSECURE_DEVELOPMENT_PASSWORD,
@@ -106,30 +107,14 @@ def test_coexisting_configurations(click_runner,
     #
 
     # Expected config files
-    felix_file_location = custom_filepath / FelixConfiguration.generate_filename()
     alice_file_location = custom_filepath / AliceConfiguration.generate_filename()
     ursula_file_location = custom_filepath / UrsulaConfiguration.generate_filename()
-
-    # Felix creates a system configuration
-    felix_init_args = ('felix', 'init',
-                       '--config-root', str(custom_filepath.absolute()),
-                       '--network', TEMPORARY_DOMAIN,
-                       '--provider', TEST_PROVIDER_URI,
-                       '--checksum-address', felix,
-                       '--registry-filepath', str(agency_local_registry.filepath.absolute()),
-                       '--debug')
-
-    result = click_runner.invoke(nucypher_cli, felix_init_args, catch_exceptions=False, env=envvars)
-    assert result.exit_code == 0
-
-    # All configuration files still exist.
-    assert custom_filepath.is_dir()
-    assert felix_file_location.is_file()
 
     # Use a custom local filepath to init a persistent Alice
     alice_init_args = ('alice', 'init',
                        '--network', TEMPORARY_DOMAIN,
-                       '--provider', TEST_PROVIDER_URI,
+                       '--payment-network', TEMPORARY_DOMAIN,
+                       '--eth-provider', TEST_ETH_PROVIDER_URI,
                        '--pay-with', alice,
                        '--registry-filepath', str(agency_local_registry.filepath.absolute()),
                        '--config-root', str(custom_filepath.absolute()))
@@ -138,14 +123,15 @@ def test_coexisting_configurations(click_runner,
     assert result.exit_code == 0
 
     # All configuration files still exist.
-    assert felix_file_location.is_file()
     assert alice_file_location.is_file()
 
     # Use the same local filepath to init a persistent Ursula
     init_args = ('ursula', 'init',
                  '--network', TEMPORARY_DOMAIN,
-                 '--provider', TEST_PROVIDER_URI,
-                 '--worker-address', ursula,
+                 '--payment-network', TEMPORARY_DOMAIN,
+                 '--eth-provider', TEST_ETH_PROVIDER_URI,
+                 '--payment-provider', TEST_POLYGON_PROVIDER_URI,
+                 '--operator-address', ursula,
                  '--rest-host', MOCK_IP_ADDRESS,
                  '--registry-filepath', str(agency_local_registry.filepath.absolute()),
                  '--config-root', str(custom_filepath.absolute()))
@@ -154,7 +140,6 @@ def test_coexisting_configurations(click_runner,
     assert result.exit_code == 0, result.output
 
     # All configuration files still exist.
-    assert felix_file_location.is_file()
     assert alice_file_location.is_file()
     assert ursula_file_location.is_file()
 
@@ -164,17 +149,18 @@ def test_coexisting_configurations(click_runner,
     # Use the same local filepath to init another persistent Ursula
     init_args = ('ursula', 'init',
                  '--network', TEMPORARY_DOMAIN,
-                 '--worker-address', another_ursula,
+                 '--payment-network', TEMPORARY_DOMAIN,
+                 '--operator-address', another_ursula,
                  '--rest-host', MOCK_IP_ADDRESS_2,
                  '--registry-filepath', str(agency_local_registry.filepath.absolute()),
-                 '--provider', TEST_PROVIDER_URI,
+                 '--eth-provider', TEST_ETH_PROVIDER_URI,
+                 '--payment-provider', TEST_POLYGON_PROVIDER_URI,
                  '--config-root', str(custom_filepath.absolute()))
 
     result = click_runner.invoke(nucypher_cli, init_args, catch_exceptions=False, env=envvars)
     assert result.exit_code == 0
 
     # All configuration files still exist.
-    assert felix_file_location.is_file()
     assert alice_file_location.is_file()
 
     kid = key_spy.spy_return.id[:8]
@@ -195,16 +181,15 @@ def test_coexisting_configurations(click_runner,
 
     user_input = f'{INSECURE_DEVELOPMENT_PASSWORD}\n' * 2
 
-    Worker.READY_POLL_RATE = 1
-    Worker.READY_TIMEOUT = 1
-    with pytest.raises(Teacher.UnbondedWorker):
-        # Worker init success, but not bonded.
+    Operator.READY_POLL_RATE = 1
+    Operator.READY_TIMEOUT = 1
+    with pytest.raises(Operator.ActorError):
+        # Operator init success, but not bonded.
         result = click_runner.invoke(nucypher_cli, run_args, input=user_input, catch_exceptions=False)
     assert result.exit_code == 0
-    Worker.READY_TIMEOUT = None
+    Operator.READY_TIMEOUT = None
 
     # All configuration files still exist.
-    assert felix_file_location.is_file()
     assert alice_file_location.is_file()
     assert another_ursula_configuration_file_location.is_file()
     assert ursula_file_location.is_file()
@@ -234,11 +219,6 @@ def test_coexisting_configurations(click_runner,
     assert result.exit_code == 0
     assert not alice_file_location.is_file()
 
-    felix_destruction_args = ('felix', 'destroy', '--force', '--config-file', str(felix_file_location.absolute()))
-    result = click_runner.invoke(nucypher_cli, felix_destruction_args, catch_exceptions=False, env=envvars)
-    assert result.exit_code == 0
-    assert not felix_file_location.is_file()
-
 
 def test_corrupted_configuration(click_runner,
                                  custom_filepath,
@@ -254,16 +234,18 @@ def test_corrupted_configuration(click_runner,
         shutil.rmtree(custom_filepath, ignore_errors=True)
     assert not custom_filepath.exists()
     
-    alice, ursula, another_ursula, felix, staker, *all_yall = testerchain.unassigned_accounts
+    alice, ursula, another_ursula, staking_provider, *all_yall = testerchain.unassigned_accounts
 
     #
     # Chaos
     #
 
     init_args = ('ursula', 'init',
-                 '--provider', TEST_PROVIDER_URI,
-                 '--worker-address', another_ursula,
+                 '--eth-provider', TEST_ETH_PROVIDER_URI,
+                '--payment-provider', TEST_POLYGON_PROVIDER_URI,
+                 '--operator-address', another_ursula,
                  '--network', TEMPORARY_DOMAIN,
+                 '--payment-network', TEMPORARY_DOMAIN,
                  '--rest-host', MOCK_IP_ADDRESS,
                  '--config-root', str(custom_filepath.absolute()),
                  )
@@ -290,8 +272,10 @@ def test_corrupted_configuration(click_runner,
     # Attempt installation again, with full args
     init_args = ('ursula', 'init',
                  '--network', TEMPORARY_DOMAIN,
-                 '--provider', TEST_PROVIDER_URI,
-                 '--worker-address', another_ursula,
+                 '--payment-network', TEMPORARY_DOMAIN,
+                 '--eth-provider', TEST_ETH_PROVIDER_URI,
+                 '--payment-provider', TEST_POLYGON_PROVIDER_URI,
+                 '--operator-address', another_ursula,
                  '--rest-host', MOCK_IP_ADDRESS,
                  '--registry-filepath', str(agency_local_registry.filepath.absolute()),
                  '--config-root', str(custom_filepath.absolute()))
@@ -305,7 +289,14 @@ def test_corrupted_configuration(click_runner,
     # Ensure configuration creation
     top_level_config_root = [f.name for f in custom_filepath.iterdir()]
     assert default_filename in top_level_config_root, "JSON configuration file was not created"
-    for field in ['known_nodes', 'keystore', default_filename]:
+
+    expected_fields = [
+        # TODO: Only using in-memory node storage for now
+        # 'known_nodes',
+        'keystore',
+        default_filename
+    ]
+    for field in expected_fields:
         assert field in top_level_config_root
 
     # "Corrupt" the configuration by removing the contract registry

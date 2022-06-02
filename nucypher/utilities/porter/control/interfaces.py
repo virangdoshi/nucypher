@@ -18,10 +18,10 @@ from typing import List, Optional
 
 from eth_typing import ChecksumAddress
 
-from nucypher.core import TreasureMap, RetrievalKit
+from nucypher_core import TreasureMap, RetrievalKit
+from nucypher_core.umbral import PublicKey
 
 from nucypher.control.interfaces import ControlInterface, attach_schema
-from nucypher.crypto.umbral_adapter import PublicKey
 from nucypher.utilities.porter.control.specifications import porter_schema
 
 
@@ -35,11 +35,9 @@ class PorterInterface(ControlInterface):
     @attach_schema(porter_schema.AliceGetUrsulas)
     def get_ursulas(self,
                     quantity: int,
-                    duration_periods: int,
                     exclude_ursulas: Optional[List[ChecksumAddress]] = None,
                     include_ursulas: Optional[List[ChecksumAddress]] = None) -> dict:
         ursulas_info = self.implementer.get_ursulas(quantity=quantity,
-                                                    duration_periods=duration_periods,
                                                     exclude_ursulas=exclude_ursulas,
                                                     include_ursulas=include_ursulas)
 

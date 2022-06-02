@@ -53,6 +53,7 @@ from nucypher.config.util import cast_paths_from
 from nucypher.crypto.keystore import Keystore
 from nucypher.crypto.powers import CryptoPower, CryptoPowerUp
 from nucypher.network.middleware import RestMiddleware
+from nucypher.policy.payment import PAYMENT_METHODS
 from nucypher.utilities.logging import Logger
 
 
@@ -321,7 +322,7 @@ class CharacterConfiguration(BaseConfiguration):
     'Sideways Engagement' of Character classes; a reflection of input parameters.
     """
 
-    VERSION = 3  # bump when static payload scheme changes
+    VERSION = 4  # bump when static payload scheme changes
 
     CHARACTER_CLASS = NotImplemented
     DEFAULT_CONTROLLER_PORT = NotImplemented
@@ -338,6 +339,11 @@ class CharacterConfiguration(BaseConfiguration):
     # Gas
     DEFAULT_GAS_STRATEGY = 'fast'
 
+    # Payments
+    DEFAULT_PAYMENT_METHOD = 'SubscriptionManager'
+    DEFAULT_PAYMENT_NETWORK = 'polygon'
+    DEFAULT_FEDERATED_PAYMENT_METHOD = 'Free'
+
     # Fields specified here are *not* passed into the Character's constructor
     # and can be understood as configuration fields only.
     _CONFIG_FIELDS = ('config_root',
@@ -347,7 +353,9 @@ class CharacterConfiguration(BaseConfiguration):
                       'gas_strategy',
                       'max_gas_price',  # gwei
                       'signer_uri',
-                      'keystore_path'
+                      'keystore_path',
+                      'payment_provider',
+                      'payment_network'
                       )
 
     def __init__(self,
@@ -389,16 +397,24 @@ class CharacterConfiguration(BaseConfiguration):
                  # Blockchain
                  poa: bool = None,
                  light: bool = False,
-                 provider_uri: str = None,
+                 eth_provider_uri: str = None,
                  gas_strategy: Union[Callable, str] = DEFAULT_GAS_STRATEGY,
                  max_gas_price: Optional[int] = None,
                  signer_uri: str = None,
 
-                 # Registry
+                 # Payments
+                 # TODO: Resolve code prefixing below, possibly with the use of nested configuration fields
+                 payment_method: str = None,
+                 payment_provider: str = None,
+                 payment_network: str = None,
+
+                 # Registries
                  registry: BaseContractRegistry = None,
                  registry_filepath: Optional[Path] = None,
+                 policy_registry: BaseContractRegistry = None,
+                 policy_registry_filepath: Optional[Path] = None,
 
-                 # Deployed Workers
+                 # Deployed Operators
                  worker_data: dict = None
                  ):
 
@@ -430,10 +446,13 @@ class CharacterConfiguration(BaseConfiguration):
         self.registry = registry or NO_BLOCKCHAIN_CONNECTION.bool_value(False)
         self.registry_filepath = registry_filepath or UNINITIALIZED_CONFIGURATION
 
+        self.policy_registry = policy_registry or NO_BLOCKCHAIN_CONNECTION.bool_value(False)
+        self.policy_registry_filepath = policy_registry_filepath or UNINITIALIZED_CONFIGURATION
+
         # Blockchain
         self.poa = poa
         self.is_light = light
-        self.provider_uri = provider_uri or NO_BLOCKCHAIN_CONNECTION
+        self.eth_provider_uri = eth_provider_uri or NO_BLOCKCHAIN_CONNECTION
         self.signer_uri = signer_uri or None
 
         # Learner
@@ -452,7 +471,7 @@ class CharacterConfiguration(BaseConfiguration):
         self.config_file_location = filepath or UNINITIALIZED_CONFIGURATION
         self.config_root = UNINITIALIZED_CONFIGURATION
 
-        # Deployed Workers
+        # Deployed Operators
         self.worker_data = worker_data
 
         #
@@ -467,7 +486,8 @@ class CharacterConfiguration(BaseConfiguration):
             # Check for incompatible values
             blockchain_args = {'filepath': registry_filepath,
                                'poa': poa,
-                               'provider_uri': provider_uri,
+                               'eth_provider_uri': eth_provider_uri,
+                               'payment_provider': payment_provider,
                                'gas_strategy': gas_strategy,
                                'max_gas_price': max_gas_price}
             if any(blockchain_args.values()):
@@ -479,10 +499,16 @@ class CharacterConfiguration(BaseConfiguration):
                 # federated configuration.
                 self.poa = False
                 self.is_light = False
-                self.provider_uri = None
+                self.eth_provider_uri = None
                 self.registry_filepath = None
+                self.policy_registry_filepath = None
                 self.gas_strategy = None
                 self.max_gas_price = None
+
+            # Federated Payments
+            self.payment_method = payment_method or self.DEFAULT_FEDERATED_PAYMENT_METHOD
+            self.payment_network = payment_network
+            self.payment_provider = payment_provider
 
         #
         # Decentralized
@@ -491,16 +517,16 @@ class CharacterConfiguration(BaseConfiguration):
         else:
             self.gas_strategy = gas_strategy
             self.max_gas_price = max_gas_price  # gwei
-            is_initialized = BlockchainInterfaceFactory.is_interface_initialized(provider_uri=self.provider_uri)
-            if not is_initialized and provider_uri:
-                BlockchainInterfaceFactory.initialize_interface(provider_uri=self.provider_uri,
+            is_initialized = BlockchainInterfaceFactory.is_interface_initialized(eth_provider_uri=self.eth_provider_uri)
+            if not is_initialized and eth_provider_uri:
+                BlockchainInterfaceFactory.initialize_interface(eth_provider_uri=self.eth_provider_uri,
                                                                 poa=self.poa,
                                                                 light=self.is_light,
                                                                 emitter=emitter,
                                                                 gas_strategy=self.gas_strategy,
                                                                 max_gas_price=self.max_gas_price)
             else:
-                self.log.warn(f"Using existing blockchain interface connection ({self.provider_uri}).")
+                self.log.warn(f"Using existing blockchain interface connection ({self.eth_provider_uri}).")
 
             if not self.registry:
                 # TODO: These two code blocks are untested.
@@ -513,6 +539,28 @@ class CharacterConfiguration(BaseConfiguration):
 
             self.testnet = self.domain != NetworksInventory.MAINNET
             self.signer = Signer.from_signer_uri(self.signer_uri, testnet=self.testnet)
+
+            #
+            # Onchain Payments & Policies
+            #
+
+            # FIXME: Enforce this for Ursula/Alice but not Bob?
+            from nucypher.config.characters import BobConfiguration
+            if not isinstance(self, BobConfiguration):
+                # if not payment_provider:
+                #     raise self.ConfigurationError("payment provider is required.")
+                self.payment_method = payment_method or self.DEFAULT_PAYMENT_METHOD
+                self.payment_network = payment_network or self.DEFAULT_PAYMENT_NETWORK
+                self.payment_provider = payment_provider or (self.eth_provider_uri or None)  # default to L1 payments
+
+                # TODO: Dedupe
+                if not self.policy_registry:
+                    if not self.policy_registry_filepath:
+                        self.log.info(f"Fetching latest policy registry from source.")
+                        self.policy_registry = InMemoryContractRegistry.from_latest_publication(network=self.payment_network)
+                    else:
+                        self.policy_registry = LocalContractRegistry(filepath=self.policy_registry_filepath)
+                        self.log.info(f"Using local policy registry ({self.policy_registry}).")
 
         if dev_mode:
             self.__temp_dir = UNINITIALIZED_CONFIGURATION
@@ -527,7 +575,7 @@ class CharacterConfiguration(BaseConfiguration):
         # Network
         self.controller_port = controller_port or self.DEFAULT_CONTROLLER_PORT
         self.network_middleware = network_middleware or self.DEFAULT_NETWORK_MIDDLEWARE(registry=self.registry)
-
+        
         super().__init__(filepath=self.config_file_location, config_root=self.config_root)
 
     def __call__(self, **character_kwargs):
@@ -591,12 +639,21 @@ class CharacterConfiguration(BaseConfiguration):
         return self.__dev_mode
 
     def _setup_node_storage(self, node_storage=None) -> None:
-        if self.dev_mode:
-            node_storage = ForgetfulNodeStorage(registry=self.registry, federated_only=self.federated_only)
-        elif not node_storage:
-            node_storage = LocalFileBasedNodeStorage(registry=self.registry,
-                                                     config_root=self.config_root,
-                                                     federated_only=self.federated_only)
+        # TODO: Disables node metadata persistence..
+        # if self.dev_mode:
+        #     node_storage = ForgetfulNodeStorage(registry=self.registry, federated_only=self.federated_only)
+
+        # TODO: Forcibly clears the filesystem of any stored node metadata and certificates...
+        local_node_storage = LocalFileBasedNodeStorage(
+            registry=self.registry,
+            config_root=self.config_root,
+            federated_only=self.federated_only
+        )
+        local_node_storage.clear()
+        self.log.info(f'Cleared peer metadata from {local_node_storage.root_dir}')
+
+        # TODO: Always sets up nodes for in-memory node metadata storage
+        node_storage = ForgetfulNodeStorage(registry=self.registry, federated_only=self.federated_only)
         self.node_storage = node_storage
 
     def forget_nodes(self) -> None:
@@ -672,7 +729,7 @@ class CharacterConfiguration(BaseConfiguration):
         return True
 
     def static_payload(self) -> dict:
-        """Exported static configuration values for initializing Ursula"""
+        """JSON-Exported static configuration values for initializing Ursula"""
         keystore_path = str(self.keystore.keystore_path) if self.keystore else None
         payload = dict(
 
@@ -693,10 +750,10 @@ class CharacterConfiguration(BaseConfiguration):
 
         # Optional values (mode)
         if not self.federated_only:
-            if self.provider_uri:
+            if self.eth_provider_uri:
                 if not self.signer_uri:
-                    self.signer_uri = self.provider_uri
-                payload.update(dict(provider_uri=self.provider_uri,
+                    self.signer_uri = self.eth_provider_uri
+                payload.update(dict(eth_provider_uri=self.eth_provider_uri,
                                     poa=self.poa,
                                     light=self.is_light,
                                     signer_uri=self.signer_uri))
@@ -717,7 +774,8 @@ class CharacterConfiguration(BaseConfiguration):
     def dynamic_payload(self) -> dict:
         """
         Exported dynamic configuration values for initializing Ursula.
-        These values are used to init a character instance but are not saved to the JSON configuration.
+        These values are used to init a character instance but are *not*
+        saved to the JSON configuration.
         """
         payload = dict()
         if not self.federated_only:
@@ -799,9 +857,15 @@ class CharacterConfiguration(BaseConfiguration):
                                                      password=password,
                                                      keystore_dir=self.keystore_dir)
         else:
-            self.__keystore = Keystore.generate(password=password,
-                                                keystore_dir=self.keystore_dir,
-                                                interactive=interactive)
+            if interactive:
+                self.__keystore = Keystore.generate(password=password,
+                                                    keystore_dir=self.keystore_dir,
+                                                    interactive=interactive)
+            else:
+                self.__keystore, _ = Keystore.generate(password=password,
+                                                       keystore_dir=self.keystore_dir,
+                                                       interactive=interactive)
+
         return self.keystore
 
     @classmethod
@@ -812,3 +876,31 @@ class CharacterConfiguration(BaseConfiguration):
         storage_class = node_storage_subclasses[storage_type]
         node_storage = storage_class.from_payload(payload=storage_payload, federated_only=federated_only)
         return node_storage
+
+    def configure_payment_method(self):
+        # TODO: finalize config fields
+        # Strategy-Based (current implementation, inflexible & hardcoded)
+        # 'payment_strategy': 'SubscriptionManager'
+        # 'payment_network': 'matic'
+        # 'payment_provider': 'https:///matic.infura.io....'
+        # Contract-Targeted (alternative implementation, flexible & generic)
+        # 'payment': {
+        #     'contract': '0xdeadbeef'
+        #     'abi': '/home/abi/sm.json'
+        #     'function': 'isPolicyActive'
+        #     'provider': 'https:///matic.infura.io....'
+        # }
+
+        try:
+            payment_class = PAYMENT_METHODS[self.payment_method]
+        except KeyError:
+            raise KeyError(f'Unknown payment verifier "{self.payment_method}"')
+
+        if payment_class.ONCHAIN:
+            # on-chain payment strategies require a blockchain connection
+            payment_strategy = payment_class(network=self.payment_network,
+                                             eth_provider=self.payment_provider,
+                                             registry=self.policy_registry)
+        else:
+            payment_strategy = payment_class()
+        return payment_strategy

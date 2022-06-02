@@ -55,14 +55,14 @@ def join_worker_pool(request):
     pool_to_join.join()
 
 
-class WorkerRule:
+class OperatorRule:
     def __init__(self, fails: bool = False, timeout_min: float = 0, timeout_max: float = 0):
         self.fails = fails
         self.timeout_min = timeout_min
         self.timeout_max = timeout_max
 
 
-class WorkerOutcome:
+class OperatorOutcome:
     def __init__(self, fails: bool, timeout: float):
         self.fails = fails
         self.timeout = timeout
@@ -70,18 +70,18 @@ class WorkerOutcome:
     def __call__(self, value):
         time.sleep(self.timeout)
         if self.fails:
-            raise Exception(f"Worker for {value} failed")
+            raise Exception(f"Operator for {value} failed")
         else:
             return value
 
 
-def generate_workers(rules: Iterable[Tuple[WorkerRule, int]], seed=None):
+def generate_workers(rules: Iterable[Tuple[OperatorRule, int]], seed=None):
     rng = random.Random(seed)
     outcomes = []
     for rule, quantity in rules:
         for _ in range(quantity):
             timeout = rng.uniform(rule.timeout_min, rule.timeout_max)
-            outcomes.append(WorkerOutcome(rule.fails, timeout))
+            outcomes.append(OperatorOutcome(rule.fails, timeout))
 
     rng.shuffle(outcomes)
 
@@ -101,8 +101,8 @@ def test_wait_for_successes(join_worker_pool):
 
     outcomes, worker = generate_workers(
         [
-            (WorkerRule(timeout_min=0.5, timeout_max=1.5), 10),
-            (WorkerRule(fails=True, timeout_min=1, timeout_max=3), 20),
+            (OperatorRule(timeout_min=0.5, timeout_max=1.5), 10),
+            (OperatorRule(fails=True, timeout_min=1, timeout_max=3), 20),
         ],
         seed=123)
 
@@ -137,8 +137,8 @@ def test_wait_for_successes_out_of_values(join_worker_pool):
 
     outcomes, worker = generate_workers(
         [
-            (WorkerRule(timeout_min=0.5, timeout_max=1.5), 9),
-            (WorkerRule(fails=True, timeout_min=0.5, timeout_max=1.5), 20),
+            (OperatorRule(timeout_min=0.5, timeout_max=1.5), 9),
+            (OperatorRule(fails=True, timeout_min=0.5, timeout_max=1.5), 20),
         ],
         seed=123)
 
@@ -167,12 +167,8 @@ def test_wait_for_successes_out_of_values(join_worker_pool):
     tracebacks = exc_info.value.get_tracebacks()
     assert len(tracebacks) == num_expected_failures
     for value, traceback in tracebacks.items():
-        assert 'raise Exception(f"Worker for {value} failed")' in traceback
-        assert f'Worker for {value} failed' in traceback
-
-    # This will be the last line in the displayed traceback;
-    # That's where the worker actually failed. (Worker for {value} failed)
-    assert 'raise Exception(f"Worker for {value} failed")' in message
+        assert 'raise Exception(f"Operator for {value} failed")' in traceback
+        assert f'Operator for {value} failed' in traceback
 
 
 def test_wait_for_successes_timed_out(join_worker_pool):
@@ -182,9 +178,9 @@ def test_wait_for_successes_timed_out(join_worker_pool):
 
     outcomes, worker = generate_workers(
         [
-            (WorkerRule(timeout_min=0, timeout_max=0.5), 9),
-            (WorkerRule(timeout_min=1.5, timeout_max=2.5), 1),
-            (WorkerRule(fails=True, timeout_min=1.5, timeout_max=2.5), 20),
+            (OperatorRule(timeout_min=0, timeout_max=0.5), 9),
+            (OperatorRule(timeout_min=1.5, timeout_max=2.5), 1),
+            (OperatorRule(fails=True, timeout_min=1.5, timeout_max=2.5), 20),
         ],
         seed=123)
 
@@ -215,8 +211,8 @@ def test_join(join_worker_pool):
 
     outcomes, worker = generate_workers(
         [
-            (WorkerRule(timeout_min=0.5, timeout_max=1.5), 9),
-            (WorkerRule(fails=True, timeout_min=0.5, timeout_max=1.5), 20),
+            (OperatorRule(timeout_min=0.5, timeout_max=1.5), 9),
+            (OperatorRule(fails=True, timeout_min=0.5, timeout_max=1.5), 20),
         ],
         seed=123)
 
@@ -265,8 +261,8 @@ def test_batched_value_generation(join_worker_pool):
 
     outcomes, worker = generate_workers(
         [
-            (WorkerRule(timeout_min=0.5, timeout_max=1.5), 80),
-            (WorkerRule(fails=True, timeout_min=0.5, timeout_max=1.5), 80),
+            (OperatorRule(timeout_min=0.5, timeout_max=1.5), 80),
+            (OperatorRule(fails=True, timeout_min=0.5, timeout_max=1.5), 80),
         ],
         seed=123)
 
@@ -306,7 +302,7 @@ def test_cancel_waiting_workers(join_worker_pool):
 
     outcomes, worker = generate_workers(
         [
-            (WorkerRule(timeout_min=1, timeout_max=1), 100),
+            (OperatorRule(timeout_min=1, timeout_max=1), 100),
         ],
         seed=123)
 
@@ -349,14 +345,17 @@ def test_buggy_factory_raises_on_block():
     """
 
     outcomes, worker = generate_workers(
-        [(WorkerRule(timeout_min=1, timeout_max=1), 100)],
+        [(OperatorRule(timeout_min=1, timeout_max=1), 100)],
         seed=123)
 
     factory = BuggyFactory(list(outcomes))
 
-    # Non-zero stagger timeout to make BuggyFactory raise its error only in 1.5s,
-    # So that we got enough successes for `block_until_target_successes()`.
-    pool = WorkerPool(worker, factory, target_successes=10, timeout=10, threadpool_size=10, stagger_timeout=1.5)
+    # WorkerPool short circuits once it has sufficient successes. Therefore,
+    # the stagger timeout needs to be less than worker timeout,
+    # since BuggyFactory only fails if you do a subsequent batch
+    # Once the subsequent batch is requested, the BuggyFactory returns an error
+    # causing WorkerPool to fail
+    pool = WorkerPool(worker, factory, target_successes=10, timeout=10, threadpool_size=10, stagger_timeout=0.75)
 
     pool.start()
     time.sleep(2) # wait for the stagger timeout to finish
@@ -378,7 +377,7 @@ def test_buggy_factory_raises_on_join():
     """
 
     outcomes, worker = generate_workers(
-        [(WorkerRule(timeout_min=1, timeout_max=1), 100)],
+        [(OperatorRule(timeout_min=1, timeout_max=1), 100)],
         seed=123)
 
     factory = BuggyFactory(list(outcomes))

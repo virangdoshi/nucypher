@@ -23,7 +23,7 @@ import maya
 import pytest
 from click.testing import CliRunner
 
-from nucypher.core import MessageKit, EncryptedTreasureMap
+from nucypher_core import MessageKit, EncryptedTreasureMap
 
 import nucypher
 from nucypher.crypto.powers import DecryptingPower
@@ -113,6 +113,7 @@ def test_alice_web_character_control_grant_error_messages(alice_web_controller_t
     assert response.status_code == 400
 
 
+@pytest.mark.skip(reason="Current implementation requires Alice to directly depend on SubscriptionManager")
 def test_alice_character_control_revoke(alice_web_controller_test_client, blockchain_bob):
     bob_pubkey_enc = blockchain_bob.public_keys(DecryptingPower)
 

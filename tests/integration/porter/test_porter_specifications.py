@@ -18,9 +18,10 @@ import random
 
 import pytest
 
+from nucypher_core.umbral import SecretKey
+
 from nucypher.characters.control.specifications.fields import Key
 from nucypher.control.specifications.exceptions import InvalidArgumentCombo, InvalidInputData
-from nucypher.crypto.umbral_adapter import SecretKey
 from nucypher.utilities.porter.control.specifications.fields import UrsulaInfoSchema, RetrievalResultSchema
 from nucypher.utilities.porter.control.specifications.porter_schema import (
     AliceGetUrsulas,
@@ -42,7 +43,6 @@ def test_alice_get_ursulas_schema(get_random_checksum_address):
     quantity = 10
     required_data = {
         'quantity': quantity,
-        'duration_periods': 4,
     }
 
     # required args
@@ -50,10 +50,6 @@ def test_alice_get_ursulas_schema(get_random_checksum_address):
 
     # missing required args
     updated_data = {k: v for k, v in required_data.items() if k != 'quantity'}
-    with pytest.raises(InvalidInputData):
-        AliceGetUrsulas().load(updated_data)
-
-    updated_data = {k: v for k, v in required_data.items() if k != 'duration_periods'}
     with pytest.raises(InvalidInputData):
         AliceGetUrsulas().load(updated_data)
 
@@ -199,6 +195,7 @@ def test_bob_retrieve_cfrags(federated_porter,
     retrieval_results = federated_porter.retrieve_cfrags(**non_encoded_retrieval_args)
     expected_retrieval_results_json = []
     retrieval_result_schema = RetrievalResultSchema()
+
     for result in retrieval_results:
         data = retrieval_result_schema.dump(result)
         expected_retrieval_results_json.append(data)

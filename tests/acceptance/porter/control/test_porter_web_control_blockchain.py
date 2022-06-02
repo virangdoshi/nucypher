@@ -20,7 +20,7 @@ import os
 from base64 import b64encode
 from urllib.parse import urlencode
 
-from nucypher.core import RetrievalKit
+from nucypher_core import RetrievalKit
 
 from nucypher.characters.lawful import Enrico
 from nucypher.crypto.powers import DecryptingPower
@@ -36,14 +36,12 @@ def test_get_ursulas(blockchain_porter_web_controller, blockchain_ursulas):
     assert response.status_code == 400
 
     quantity = 4
-    duration = 2
     blockchain_ursulas_list = list(blockchain_ursulas)
     include_ursulas = [blockchain_ursulas_list[0].checksum_address, blockchain_ursulas_list[1].checksum_address]
     exclude_ursulas = [blockchain_ursulas_list[2].checksum_address, blockchain_ursulas_list[3].checksum_address]
 
     get_ursulas_params = {
         'quantity': quantity,
-        'duration_periods': duration,
         'include_ursulas': include_ursulas,
         'exclude_ursulas': exclude_ursulas
     }
@@ -67,7 +65,6 @@ def test_get_ursulas(blockchain_porter_web_controller, blockchain_ursulas):
     # Test Query parameters
     #
     response = blockchain_porter_web_controller.get(f'/get_ursulas?quantity={quantity}'
-                                                    f'&duration_periods={duration}'
                                                     f'&include_ursulas={",".join(include_ursulas)}'
                                                     f'&exclude_ursulas={",".join(exclude_ursulas)}')
     assert response.status_code == 200
@@ -147,7 +144,7 @@ def test_retrieve_cfrags(blockchain_porter,
 
     assert policy_message_kit.is_decryptable_by_receiver()
 
-    cleartext = blockchain_bob._crypto_power.power_ups(DecryptingPower).keypair.decrypt(policy_message_kit)
+    cleartext = blockchain_bob._crypto_power.power_ups(DecryptingPower).keypair.decrypt_message_kit(policy_message_kit)
     assert cleartext == original_message
 
     #
@@ -197,10 +194,8 @@ def test_retrieve_cfrags(blockchain_porter,
 
 def test_get_ursulas_basic_auth(blockchain_porter_basic_auth_web_controller):
     quantity = 4
-    duration = 2
     get_ursulas_params = {
         'quantity': quantity,
-        'duration_periods': duration,
     }
 
     response = blockchain_porter_basic_auth_web_controller.get('/get_ursulas', data=json.dumps(get_ursulas_params))

@@ -17,10 +17,11 @@
 
 
 import random
-import requests
 from ipaddress import ip_address
-from requests.exceptions import RequestException, HTTPError
 from typing import Union, Optional
+
+import requests
+from requests.exceptions import RequestException, HTTPError
 
 from nucypher.acumen.perception import FleetSensor
 from nucypher.blockchain.eth.registry import BaseContractRegistry
@@ -34,7 +35,7 @@ class UnknownIPAddress(RuntimeError):
     pass
 
 
-class InvalidWorkerIP(RuntimeError):
+class InvalidOperatorIP(RuntimeError):
     """Raised when an Ursula is using an invalid IP address for it's server."""
 
 
@@ -59,10 +60,11 @@ RESERVED_IP_ADDRESSES = (
 IP_DETECTION_LOGGER = Logger('external-ip-detection')
 
 
-def validate_worker_ip(worker_ip: str) -> None:
-    if worker_ip in RESERVED_IP_ADDRESSES:
-        raise InvalidWorkerIP(f'{worker_ip} is not a valid or permitted worker IP address.  '
-                              f'Verify the rest_host is set to the external IPV4 address')
+def validate_operator_ip(ip: str) -> None:
+    if ip in RESERVED_IP_ADDRESSES:
+        raise InvalidOperatorIP(f"{ip} is not a valid or permitted operator IP address. "
+                                f"Verify the 'rest_host' configuration value is set to the "
+                                f"external IPV4 address")
 
 
 def _request(url: str, certificate=None) -> Union[str, None]:

@@ -18,15 +18,16 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 
 import pytest
 
-from nucypher.blockchain.eth.actors import Investigator, Staker
-from nucypher.blockchain.eth.agents import ContractAgency, NucypherTokenAgent, StakingEscrowAgent
+from nucypher_core.umbral import SecretKeyFactory, Signer
+
+from nucypher.blockchain.eth.actors import Investigator
+from nucypher.blockchain.eth.agents import ContractAgency, NucypherTokenAgent
 from nucypher.blockchain.eth.constants import NULL_ADDRESS
 from nucypher.blockchain.eth.signers.software import Web3Signer
 from nucypher.blockchain.eth.token import NU
 from nucypher.config.constants import TEMPORARY_DOMAIN
 from nucypher.crypto.powers import TransactingPower
 from nucypher.crypto.signing import SignatureStamp
-from nucypher.crypto.umbral_adapter import SecretKeyFactory, Signer
 
 
 def mock_ursula(testerchain, account, mocker):
@@ -37,7 +38,7 @@ def mock_ursula(testerchain, account, mocker):
     signed_stamp = testerchain.client.sign_message(account=account,
                                                    message=bytes(ursula_stamp))
 
-    ursula = mocker.Mock(stamp=ursula_stamp, decentralized_identity_evidence=signed_stamp)
+    ursula = mocker.Mock(stamp=ursula_stamp, operator_signature=signed_stamp)
     return ursula
 
 
@@ -46,10 +47,10 @@ def test_investigator_requests_slashing(testerchain,
                                         test_registry,
                                         agency,
                                         #mock_ursula_reencrypts,
-                                        token_economics,
+                                        application_economics,
                                         mocker):
 
-    staker_account = testerchain.staker_account(0)
+    staker_account = testerchain.stake_provider_account(0)
     worker_account = testerchain.ursula_account(0)
 
     ##### STAKING ESCROW STUFF #####
@@ -57,7 +58,7 @@ def test_investigator_requests_slashing(testerchain,
     token_agent = ContractAgency.get_agent(NucypherTokenAgent, registry=test_registry)
     staking_agent = ContractAgency.get_agent(StakingEscrowAgent, registry=test_registry)
 
-    locked_tokens = token_economics.minimum_allowed_locked * 5
+    locked_tokens = application_economics.min_authorization * 5
 
     # The staker receives an initial amount of tokens
     tpower = TransactingPower(account=testerchain.etherbase_account, signer=Web3Signer(testerchain.client))
@@ -72,7 +73,7 @@ def test_investigator_requests_slashing(testerchain,
                     registry=test_registry)
 
     staker.initialize_stake(amount=NU(locked_tokens, 'NuNit'),
-                            lock_periods=token_economics.minimum_locked_periods)
+                            lock_periods=application_economics.min_operator_seconds)
     assert staker.locked_tokens(periods=1) == locked_tokens
 
     # The staker hasn't bond a worker yet
@@ -104,5 +105,5 @@ def test_investigator_requests_slashing(testerchain,
     investigator_reward = investigator.token_balance - bobby_old_balance
 
     assert investigator_reward > 0
-    assert investigator_reward == token_economics.base_penalty / token_economics.reward_coefficient
+    assert investigator_reward == application_economics.base_penalty / application_economics.reward_coefficient
     assert staker.locked_tokens(periods=1) < locked_tokens

@@ -49,7 +49,7 @@ class NodeStorage(ABC):
         pass
 
     def __init__(self,
-                 federated_only: bool,  # TODO# 466
+                 federated_only: bool = False,  # TODO# 466
                  character_class=None,
                  registry: BaseContractRegistry = None,
                  ) -> None:
@@ -326,7 +326,7 @@ class LocalFileBasedNodeStorage(NodeStorage):
         """Deserialize an X509 certificate from a filepath"""
         try:
             with open(filepath, 'rb') as certificate_file:
-                certificate = x509.load_pem_x509_certificate(certificate_file.read(), backend=default_backend())
+                certificate = x509.load_der_x509_certificate(certificate_file.read(), backend=default_backend())
                 return certificate
         except FileNotFoundError:
             raise FileNotFoundError("No SSL certificate found at {}".format(filepath))

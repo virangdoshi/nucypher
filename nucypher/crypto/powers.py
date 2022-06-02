@@ -19,14 +19,16 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 import inspect
 from typing import List, Optional, Tuple
 
+from eth_account._utils.signing import to_standard_signature_bytes
 from eth_typing.evm import ChecksumAddress
 from hexbytes import HexBytes
+
+from nucypher_core.umbral import generate_kfrags, SecretKeyFactory, SecretKey, PublicKey
 
 from nucypher.blockchain.eth.decorators import validate_checksum_address
 from nucypher.blockchain.eth.signers.base import Signer
 from nucypher.crypto import keypairs
 from nucypher.crypto.keypairs import DecryptingKeypair, SigningKeypair, HostingKeypair
-from nucypher.crypto.umbral_adapter import generate_kfrags, SecretKeyFactory, SecretKey, PublicKey
 
 
 class PowerUpError(TypeError):
@@ -177,7 +179,11 @@ class TransactingPower(CryptoPowerUp):
 
     def sign_message(self, message: bytes) -> bytes:
         """Signs the message with the private key of the TransactingPower."""
-        return self._signer.sign_message(account=self.__account, message=message)
+        signature = self._signer.sign_message(account=self.__account, message=message)
+
+        # This signature will need to be passed to Rust, so we are cleaning the chain identifier
+        # from the recovery byte, bringing it to the standard choice of {0, 1}.
+        return to_standard_signature_bytes(signature)
 
     def sign_transaction(self, transaction_dict: dict) -> HexBytes:
         """Signs the transaction with the private key of the TransactingPower."""
@@ -234,7 +240,7 @@ class SigningPower(KeyPairBasedPower):
 class DecryptingPower(KeyPairBasedPower):
     _keypair_class = DecryptingKeypair
     not_found_error = NoDecryptingPower
-    provides = ("decrypt",)
+    provides = ("decrypt_message_kit", "decrypt_kfrag", "decrypt_treasure_map")
 
 
 class DerivedKeyBasedPower(CryptoPowerUp):

@@ -28,9 +28,10 @@ from constant_sorrow.constants import (
     STRANGER
 )
 from eth_keys import KeyAPI as EthKeyAPI
-from eth_utils import to_canonical_address, to_checksum_address
+from eth_utils import to_canonical_address
 
-from nucypher.core import MessageKit
+from nucypher_core import MessageKit
+from nucypher_core.umbral import PublicKey
 
 from nucypher.acumen.nicknames import Nickname
 from nucypher.blockchain.eth.registry import BaseContractRegistry, InMemoryContractRegistry
@@ -49,7 +50,6 @@ from nucypher.crypto.signing import (
     SignatureStamp,
     StrangerStamp,
 )
-from nucypher.crypto.umbral_adapter import PublicKey
 from nucypher.network.middleware import RestMiddleware
 from nucypher.network.nodes import Learner
 
@@ -71,7 +71,7 @@ class Character(Learner):
                  keystore: Keystore = None,
                  crypto_power: CryptoPower = None,
                  crypto_power_ups: List[CryptoPowerUp] = None,
-                 provider_uri: str = None,
+                 eth_provider_uri: str = None,
                  signer: Signer = None,
                  registry: BaseContractRegistry = None,
                  include_self_in_the_state: bool = False,
@@ -120,8 +120,8 @@ class Character(Learner):
                 federated_only = known_node_class._federated_only_instances
 
         if federated_only:
-            if registry or provider_uri:
-                raise ValueError(f"Cannot init federated-only character with {registry or provider_uri}.")
+            if registry or eth_provider_uri:
+                raise ValueError(f"Cannot init federated-only character with {registry or eth_provider_uri}.")
         self.federated_only: bool = federated_only
 
         ##########################################
@@ -164,18 +164,14 @@ class Character(Learner):
 
             # Blockchainy
             if not self.federated_only:
-                self.provider_uri = provider_uri
-
-                # TODO: Implicit / lazy blockchain connection here?
-                # if not BlockchainInterfaceFactory.is_interface_initialized(provider_uri=provider_uri):
-                #     BlockchainInterfaceFactory.initialize_interface(provider_uri=provider_uri)
-
+                self.eth_provider_uri = eth_provider_uri
                 self.registry = registry or InMemoryContractRegistry.from_latest_publication(network=domain)  # See #1580
             else:
                 self.registry = NO_BLOCKCHAIN_CONNECTION.bool_value(False)
 
             # REST
-            self.network_middleware = network_middleware or RestMiddleware(registry=self.registry)
+            self.network_middleware = network_middleware or RestMiddleware(registry=self.registry,
+                                                                           eth_provider_uri=eth_provider_uri)
 
             # Learner
             Learner.__init__(self,
@@ -276,13 +272,9 @@ class Character(Learner):
             return self._stamp
 
     @property
-    def canonical_public_address(self):
+    def canonical_address(self):
         # TODO: This is wasteful.  #1995
         return to_canonical_address(self.checksum_address)
-
-    @canonical_public_address.setter
-    def canonical_public_address(self, address_bytes):
-        self._checksum_address = to_checksum_address(address_bytes)
 
     @classmethod
     def from_config(cls, config, **overrides) -> 'Character':
@@ -364,8 +356,8 @@ class Character(Learner):
 
         # TODO: who even uses this method except for tests?
 
-        message_kit = MessageKit.author(policy_encrypting_key=recipient.public_keys(DecryptingPower),
-                                        plaintext=plaintext)
+        message_kit = MessageKit(policy_encrypting_key=recipient.public_keys(DecryptingPower),
+                                 plaintext=plaintext)
         return message_kit
 
     def public_keys(self, power_up_class: ClassVar):

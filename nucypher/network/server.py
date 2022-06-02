@@ -16,35 +16,33 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 
-from http import HTTPStatus
 import uuid
 import weakref
+from http import HTTPStatus
 from pathlib import Path
 from typing import Tuple
 
 from constant_sorrow import constants
-from constant_sorrow.constants import RELAX, NOT_STAKING
+from constant_sorrow.constants import RELAX
 from flask import Flask, Response, jsonify, request
 from mako import exceptions as mako_exceptions
 from mako.template import Template
-
-from nucypher.core import (
+from nucypher_core import (
     ReencryptionRequest,
     RevocationOrder,
-    NodeMetadata,
     MetadataRequest,
     MetadataResponse,
-    )
+    MetadataResponsePayload,
+)
 
-from nucypher.blockchain.eth.utils import period_to_epoch
 from nucypher.config.constants import MAX_UPLOAD_CONTENT_LENGTH
 from nucypher.crypto.keypairs import DecryptingKeypair
 from nucypher.crypto.signing import InvalidSignature
 from nucypher.datastore.datastore import Datastore
 from nucypher.datastore.models import ReencryptionRequest as ReencryptionRequestModel
 from nucypher.network.exceptions import NodeSeemsToBeDown
-from nucypher.network.protocols import InterfaceInfo
 from nucypher.network.nodes import NodeSprout
+from nucypher.network.protocols import InterfaceInfo
 from nucypher.utilities.logging import Logger
 
 HERE = BASE_DIR = Path(__file__).parent
@@ -81,7 +79,6 @@ class ProxyRESTServer:
 def make_rest_app(
         db_filepath: Path,
         this_node,
-        domain,
         log: Logger = Logger("http-application-layer")
         ) -> Tuple[Flask, Datastore]:
     """
@@ -98,16 +95,15 @@ def make_rest_app(
 
     log.info("Starting datastore {}".format(db_filepath))
     datastore = Datastore(db_filepath)
-    rest_app = _make_rest_app(weakref.proxy(datastore), weakref.proxy(this_node), domain, log)
+    rest_app = _make_rest_app(weakref.proxy(datastore), weakref.proxy(this_node), log)
 
     return rest_app, datastore
 
 
-def _make_rest_app(datastore: Datastore, this_node, domain: str, log: Logger) -> Flask:
+def _make_rest_app(datastore: Datastore, this_node, log: Logger) -> Flask:
 
     # TODO: Avoid circular imports :-(
     from nucypher.characters.lawful import Alice, Bob, Ursula
-    from nucypher.policy.policies import Policy
 
     _alice_class = Alice
     _bob_class = Bob
@@ -145,13 +141,21 @@ def _make_rest_app(datastore: Datastore, this_node, domain: str, log: Logger) ->
             # log.debug("Learner already knew fleet state {}; doing nothing.".format(learner_fleet_state))  # 1712
             headers = {'Content-Type': 'application/octet-stream'}
             # No nodes in the response: same fleet state
-            response = MetadataResponse.author(signer=this_node.stamp.as_umbral_signer(),
-                                               timestamp_epoch=this_node.known_nodes.timestamp.epoch)
+            response_payload = MetadataResponsePayload(timestamp_epoch=this_node.known_nodes.timestamp.epoch,
+                                                       announce_nodes=[])
+            response = MetadataResponse(this_node.stamp.as_umbral_signer(),
+                                        response_payload)
             return Response(bytes(response), headers=headers)
 
         if metadata_request.announce_nodes:
-            for node in metadata_request.announce_nodes:
-                this_node.remember_node(NodeSprout(node))
+            for metadata in metadata_request.announce_nodes:
+                try:
+                    metadata.verify()
+                except Exception:
+                    # inconsistent metadata
+                    pass
+                else:
+                    this_node.remember_node(NodeSprout(metadata))
 
         # TODO: generate a new fleet state here?
 
@@ -183,56 +187,31 @@ def _make_rest_app(datastore: Datastore, this_node, domain: str, log: Logger) ->
 
         # Verify & Decrypt KFrag Payload
         try:
-            authorized_kfrag = this_node._decrypt_kfrag(reenc_request.encrypted_kfrag)
+            verified_kfrag = this_node._decrypt_kfrag(reenc_request.encrypted_kfrag, hrac, publisher_verifying_key)
         except DecryptingKeypair.DecryptionFailed:
             # TODO: don't we want to record suspicious activities here too?
             return Response(response="EncryptedKeyFrag decryption failed.", status=HTTPStatus.FORBIDDEN)
-        except Exception as e:
-            message = f'{bob_identity_message} Invalid EncryptedKeyFrag: {e}.'
-            log.info(message)
-            # TODO (#567): bucket the node as suspicious
-            return Response(message, status=HTTPStatus.BAD_REQUEST)
-
-        # Verify KFrag Authorization (offchain)
-        try:
-            verified_kfrag = authorized_kfrag.verify(hrac=hrac,
-                                                     publisher_verifying_key=publisher_verifying_key)
         except InvalidSignature as e:
             message = f'{bob_identity_message} Invalid signature for KeyFrag: {e}.'
             log.info(message)
             # TODO (#567): bucket the node as suspicious
             return Response(message, status=HTTPStatus.UNAUTHORIZED)  # 401 - Unauthorized
         except Exception as e:
-            message = f'{bob_identity_message} Invalid KeyFrag: {e}.'
+            message = f'{bob_identity_message} Invalid EncryptedKeyFrag: {e}.'
             log.info(message)
+            # TODO (#567): bucket the node as suspicious
             return Response(message, status=HTTPStatus.BAD_REQUEST)
 
-        if not this_node.federated_only:
-
-            # Verify Policy Payment (onchain)
-            try:
-                this_node.verify_policy_payment(hrac=hrac)
-            except Policy.Unpaid:
-                message = f"{bob_identity_message} Policy {hrac} is unpaid."
-                record = (publisher_verifying_key, message)
-                # TODO (#567): bucket the node as suspicious
-                return Response(message, status=HTTPStatus.PAYMENT_REQUIRED)
-            except Policy.Unknown:
-                message = f"{bob_identity_message} Policy {hrac} is not a published policy."
-                return Response(message, status=HTTPStatus.NOT_FOUND)
-
-            # Verify Active Policy (onchain)
-            try:
-                this_node.verify_active_policy(hrac=hrac)
-            except Policy.Inactive:
-                message = f"{bob_identity_message} Policy {hrac} is not active."
-                return Response(message, status=HTTPStatus.FORBIDDEN)
-            except this_node.PolicyInfo.Expired:
-                message = f"{bob_identity_message} Policy {hrac} is expired."
-                return Response(message, status=HTTPStatus.FORBIDDEN)
+        # Enforce Policy Payment
+        # TODO: Accept multiple payment methods
+        # TODO: Evaluate multiple reencryption prerequisites & enforce policy expiration
+        paid = this_node.payment_method.verify(payee=this_node.checksum_address, request=reenc_request)
+        if not paid:
+            message = f"{bob_identity_message} Policy {bytes(hrac)} is unpaid."
+            return Response(message, status=HTTPStatus.PAYMENT_REQUIRED)
 
         # Re-encrypt
-        # TODO: return a sensible response if it fails
+        # TODO: return a sensible response if it fails (currently results in 500)
         response = this_node._reencrypt(kfrag=verified_kfrag, capsules=reenc_request.capsules)
 
         # Now, Ursula saves evidence of this workorder to her database...
@@ -246,7 +225,7 @@ def _make_rest_app(datastore: Datastore, this_node, domain: str, log: Logger) ->
     @rest_app.route('/revoke', methods=['POST'])
     def revoke():
         revocation = RevocationOrder.from_bytes(request.data)
-        # TODO: Implement offchain revocation.
+        # TODO: Implement off-chain revocation.
         return Response(status=HTTPStatus.OK)
 
     @rest_app.route("/ping", methods=['GET'])
@@ -274,13 +253,9 @@ def _make_rest_app(datastore: Datastore, this_node, domain: str, log: Logger) ->
 
         # Make a Sandwich
         try:
-            # Fetch and store initiator's teacher certificate.
-            certificate = this_node.network_middleware.get_certificate(host=initiator_address, port=initiator_port)
-            certificate_filepath = this_node.node_storage.store_node_certificate(certificate=certificate)
             requesting_ursula_metadata = this_node.network_middleware.client.node_information(
                 host=initiator_address,
                 port=initiator_port,
-                certificate_filepath=certificate_filepath
             )
         except NodeSeemsToBeDown:
             return Response({'error': 'Unreachable node'}, status=HTTPStatus.BAD_REQUEST)  # ... toasted

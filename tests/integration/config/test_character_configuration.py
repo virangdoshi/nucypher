@@ -15,16 +15,13 @@
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-import os
-from pathlib import Path
-from unittest.mock import Mock
-import pytest
 import tempfile
+from pathlib import Path
 
+import pytest
 from constant_sorrow.constants import CERTIFICATE_NOT_SAVED, NO_KEYSTORE_ATTACHED
+from nucypher_core.umbral import SecretKey
 
-from nucypher.blockchain.eth.actors import StakeHolder
-from nucypher.characters.chaotic import Felix
 from nucypher.characters.lawful import Alice, Bob, Ursula
 from nucypher.cli.actions.configure import destroy_configuration
 from nucypher.cli.literature import SUCCESSFUL_DESTRUCTION
@@ -32,29 +29,22 @@ from nucypher.config.base import CharacterConfiguration
 from nucypher.config.characters import (
     AliceConfiguration,
     BobConfiguration,
-    FelixConfiguration,
-    StakeHolderConfiguration,
     UrsulaConfiguration
 )
 from nucypher.config.constants import TEMPORARY_DOMAIN
 from nucypher.config.storages import ForgetfulNodeStorage
 from nucypher.crypto.keystore import Keystore
-from nucypher.crypto.umbral_adapter import SecretKey
-from tests.constants import INSECURE_DEVELOPMENT_PASSWORD
+from tests.constants import INSECURE_DEVELOPMENT_PASSWORD, MOCK_ETH_PROVIDER_URI
 from tests.constants import MOCK_IP_ADDRESS
 
 # Main Cast
 configurations = (AliceConfiguration, BobConfiguration, UrsulaConfiguration)
 characters = (Alice, Bob, Ursula)
 
-# Auxiliary Support
-blockchain_only_configurations = (FelixConfiguration, StakeHolderConfiguration)
-blockchain_only_characters = (Felix, StakeHolder)
-
 # Assemble
 characters_and_configurations = list(zip(characters, configurations))
-all_characters = tuple(characters + blockchain_only_characters)
-all_configurations = tuple(configurations + blockchain_only_configurations)
+all_characters = tuple(characters, )
+all_configurations = tuple(configurations, )
 
 
 @pytest.mark.parametrize("character,configuration", characters_and_configurations)
@@ -68,7 +58,7 @@ def test_federated_development_character_configurations(character, configuration
     assert config.is_me is True
     assert config.dev_mode is True
     assert config.keystore == NO_KEYSTORE_ATTACHED
-    assert config.provider_uri is None
+    assert config.eth_provider_uri is None
 
     # Production
     thing_one = config()
@@ -105,9 +95,12 @@ def test_federated_development_character_configurations(character, configuration
             alice.disenchant()
 
 
-# TODO: This test is unnecessarily slow due to the blockchain configurations. Perhaps we should mock them -- See #2230
 @pytest.mark.parametrize('configuration_class', all_configurations)
-def test_default_character_configuration_preservation(configuration_class, testerchain, test_registry_source_manager, tmpdir):
+def test_default_character_configuration_preservation(configuration_class,
+                                                      mock_testerchain,
+                                                      test_registry_source_manager,
+                                                      tmpdir,
+                                                      test_registry):
 
     configuration_class.DEFAULT_CONFIG_ROOT = Path('/tmp')
     fake_address = '0xdeadbeef'
@@ -122,11 +115,7 @@ def test_default_character_configuration_preservation(configuration_class, teste
         expected_filepath.unlink()
     assert not expected_filepath.exists()
 
-    if configuration_class == StakeHolderConfiguration:
-        # special case for defaults
-        character_config = StakeHolderConfiguration(provider_uri=testerchain.provider_uri, domain=network)
-
-    elif configuration_class == UrsulaConfiguration:
+    if configuration_class == UrsulaConfiguration:
         # special case for rest_host & dev mode
         # use keystore
         keystore = Keystore.generate(password=INSECURE_DEVELOPMENT_PASSWORD, keystore_dir=tmpdir)
@@ -134,10 +123,16 @@ def test_default_character_configuration_preservation(configuration_class, teste
         character_config = configuration_class(checksum_address=fake_address,
                                                domain=network,
                                                rest_host=MOCK_IP_ADDRESS,
+                                               payment_provider=MOCK_ETH_PROVIDER_URI,
+                                               policy_registry=test_registry,
+                                               payment_network=TEMPORARY_DOMAIN,
                                                keystore=keystore)
 
     else:
-        character_config = configuration_class(checksum_address=fake_address, domain=network)
+        character_config = configuration_class(checksum_address=fake_address,
+                                               domain=network,
+                                               payment_network=TEMPORARY_DOMAIN,
+                                               policy_registry=test_registry)
 
     generated_filepath = character_config.generate_filepath()
     assert generated_filepath == expected_filepath

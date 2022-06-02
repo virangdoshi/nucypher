@@ -15,20 +15,20 @@ You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 import datetime
-from base64 import b64encode, b64decode
+from base64 import b64encode
 
 import maya
 import pytest
+from nucypher_core import (
+    MessageKit as MessageKitClass,
+    EncryptedTreasureMap as EncryptedTreasureMapClass)
+from nucypher_core.umbral import SecretKey
 
-from nucypher.core import MessageKit as MessageKitClass
-
-from nucypher.crypto.umbral_adapter import SecretKey, Signer
 from nucypher.characters.control.specifications.fields import (
     DateTime,
     FileField,
     Key,
     MessageKit,
-    UmbralSignature,
     EncryptedTreasureMap
 )
 from nucypher.characters.lawful import Enrico
@@ -45,6 +45,7 @@ from nucypher.control.specifications.exceptions import InvalidInputData
 #
 #     deserialized = field._deserialize(value=serialized, attr=None, data=None)
 #     assert deserialized == data
+
 
 
 def test_file(tmpdir):
@@ -126,34 +127,11 @@ def test_message_kit(enacted_federated_policy, federated_alice):
     assert serialized == b64encode(bytes(message_kit)).decode()
 
     deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == message_kit
+    deserialized_plaintext = federated_alice.decrypt_message_kit(enacted_federated_policy.label, deserialized)[0]
+    assert deserialized_plaintext == plaintext_bytes
 
     with pytest.raises(InvalidInputData):
         field._deserialize(value=b"MessageKit", attr=None, data=None)
-
-
-def test_umbral_signature():
-    umbral_priv_key = SecretKey.random()
-    signer = Signer(umbral_priv_key)
-
-    message = b'this is a message'
-    signature = signer.sign(message)
-    other_signature = signer.sign(b'this is a different message')
-
-    field = UmbralSignature()
-    serialized = field._serialize(value=signature, attr=None, obj=None)
-    assert serialized == b64encode(bytes(signature)).decode()
-    assert serialized != b64encode(bytes(other_signature)).decode()
-
-    deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == signature
-    assert deserialized != other_signature
-
-    field._validate(value=bytes(signature))
-    field._validate(value=bytes(other_signature))
-
-    with pytest.raises(InvalidInputData):
-        field._validate(value=b"UmbralSignature")
 
 
 def test_treasure_map(enacted_federated_policy):
@@ -164,7 +142,8 @@ def test_treasure_map(enacted_federated_policy):
     assert serialized == b64encode(bytes(treasure_map)).decode()
 
     deserialized = field._deserialize(value=serialized, attr=None, data=None)
-    assert deserialized == treasure_map
+    assert isinstance(deserialized, EncryptedTreasureMapClass)
+    assert bytes(deserialized) == bytes(treasure_map)
 
     with pytest.raises(InvalidInputData):
         field._deserialize(value=b64encode(b"TreasureMap").decode(), attr=None, data=None)

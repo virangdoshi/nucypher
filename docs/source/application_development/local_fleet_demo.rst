@@ -8,7 +8,7 @@ Overview
 --------
 
 To aid in application development, a network of federated Ursulas can be run locally. These Ursulas do not utilize
-blockchain functionality, but afford the same cryptographic capabilities of the public NuCypher network.
+blockchain functionality, but afford the same cryptographic capabilities of the public PRE nodes on the Threshold Network.
 
 .. note::
 
@@ -27,7 +27,7 @@ Running a Local Fleet
 1. Install NuCypher
 
 Acquire the NuCypher application code and install the dependencies.
-For a full installation guide see the :doc:`/references/pip-installation`.
+For a full installation guide see the :doc:`/references/installation`.
 
 2. Run a Lonely Ursula
 

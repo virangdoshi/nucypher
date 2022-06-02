@@ -16,20 +16,16 @@
 """
 
 import pytest
+from nucypher_core import MetadataResponse, MetadataResponsePayload
 from twisted.logger import LogLevel, globalLogPublisher
-from constant_sorrow.constants import NOT_SIGNED
-
-from nucypher.core import MetadataResponse
 
 from nucypher.acumen.perception import FleetSensor
 from nucypher.config.constants import TEMPORARY_DOMAIN
-from nucypher.crypto.powers import TransactingPower
-from nucypher.crypto.signing import InvalidSignature
-from nucypher.network.nodes import Learner
 from tests.utils.middleware import MockRestMiddleware
-from tests.utils.ursula import make_ursula_for_staker
+from tests.utils.ursula import make_ursula_for_staking_provider
 
 
+# @pytest.mark.skip()
 def test_blockchain_ursula_stamp_verification_tolerance(blockchain_ursulas, mocker):
     #
     # Setup
@@ -44,7 +40,7 @@ def test_blockchain_ursula_stamp_verification_tolerance(blockchain_ursulas, mock
             warnings.append(event)
 
     # Make a bad identity evidence
-    unsigned._Teacher__decentralized_identity_evidence = unsigned._Teacher__decentralized_identity_evidence[:-5] + (b'\x00' * 5)
+    unsigned._Ursula__operator_signature = unsigned._Ursula__operator_signature[:-5] + (b'\x00' * 5)
     # Reset the metadata cache
     unsigned._metadata = None
 
@@ -74,8 +70,10 @@ def test_blockchain_ursula_stamp_verification_tolerance(blockchain_ursulas, mock
 
     def bad_bytestring_of_known_nodes():
         # Signing with the learner's signer instead of the teacher's signer
-        response = MetadataResponse.author(signer=lonely_blockchain_learner.stamp.as_umbral_signer(),
-                                           timestamp_epoch=blockchain_teacher.known_nodes.timestamp.epoch)
+        response_payload = MetadataResponsePayload(timestamp_epoch=blockchain_teacher.known_nodes.timestamp.epoch,
+                                                   announce_nodes=[])
+        response = MetadataResponse(signer=lonely_blockchain_learner.stamp.as_umbral_signer(),
+                                    payload=response_payload)
         return bytes(response)
 
     mocker.patch.object(blockchain_teacher, 'bytestring_of_known_nodes', bad_bytestring_of_known_nodes)
@@ -87,18 +85,18 @@ def test_blockchain_ursula_stamp_verification_tolerance(blockchain_ursulas, mock
     assert len(warnings) == 2
     warning = warnings[1]['log_format']
     assert str(blockchain_teacher) in warning
-    assert "Invalid signature received from teacher" in warning  # TODO: Cleanup logging templates
+    assert "Failed to verify MetadataResponse from Teacher" in warning  # TODO: Cleanup logging templates
 
 
 @pytest.mark.skip("See Issue #1075")  # TODO: Issue #1075
-def test_invalid_workers_tolerance(testerchain,
-                                   test_registry,
-                                   blockchain_ursulas,
-                                   agency,
-                                   idle_staker,
-                                   token_economics,
-                                   ursula_decentralized_test_config
-                                   ):
+def test_invalid_operators_tolerance(testerchain,
+                                     test_registry,
+                                     blockchain_ursulas,
+                                     agency,
+                                     idle_staker,
+                                     application_economics,
+                                     ursula_decentralized_test_config
+                                     ):
     #
     # Setup
     #
@@ -116,8 +114,8 @@ def test_invalid_workers_tolerance(testerchain,
 
     # Now let's create an active worker for this staker.
     # First, stake something (e.g. the bare minimum)
-    amount = token_economics.minimum_allowed_locked
-    periods = token_economics.minimum_locked_periods
+    amount = application_economics.min_authorization
+    periods = application_economics.min_operator_seconds
 
     idle_staker.initialize_stake(amount=amount, lock_periods=periods)
 
@@ -126,20 +124,20 @@ def test_invalid_workers_tolerance(testerchain,
     idle_staker.stake_tracker.refresh()
 
     # We create an active worker node for this staker
-    worker = make_ursula_for_staker(staker=idle_staker,
-                                    worker_address=testerchain.unassigned_accounts[-1],
-                                    ursula_config=ursula_decentralized_test_config,
-                                    blockchain=testerchain,
-                                    ursulas_to_learn_about=None)
+    worker = make_ursula_for_staking_provider(staking_provider=idle_staker,
+                                              operator_address=testerchain.unassigned_accounts[-1],
+                                              ursula_config=ursula_decentralized_test_config,
+                                              blockchain=testerchain,
+                                              ursulas_to_learn_about=None)
 
     # Since we made a commitment, we need to advance one period
     testerchain.time_travel(periods=1)
 
     # The worker is valid and can be verified (even with the force option)
-    worker.verify_node(force=True, network_middleware=MockRestMiddleware(), certificate_filepath="quietorl")
+    worker.verify_node(force=True, network_middleware=MockRestMiddleware())
     # In particular, we know that it's bonded to a staker who is really staking.
-    assert worker._worker_is_bonded_to_staker(registry=test_registry)
-    assert worker._staker_is_really_staking(registry=test_registry)
+    assert worker._operator_is_bonded(registry=test_registry)
+    assert worker._staking_provider_is_really_staking(registry=test_registry)
 
     # OK. Now we learn about this worker.
     lonely_blockchain_learner.remember_node(worker)
@@ -161,11 +159,11 @@ def test_invalid_workers_tolerance(testerchain,
     assert 0 == staking_agent.owned_tokens(idle_staker.checksum_address)
 
     # ... but the worker node still is "verified" (since we're not forcing on-chain verification)
-    worker.verify_node(network_middleware=MockRestMiddleware(), certificate_filepath="quietorl")
+    worker.verify_node(network_middleware=MockRestMiddleware())
 
     # If we force, on-chain verification, the worker is of course not verified
     with pytest.raises(worker.NotStaking):
-        worker.verify_node(force=True, network_middleware=MockRestMiddleware(), certificate_filepath="quietorl")
+        worker.verify_node(force=True, network_middleware=MockRestMiddleware())
 
     # Let's learn from this invalid node
     lonely_blockchain_learner._current_teacher_node = worker

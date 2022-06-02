@@ -20,17 +20,18 @@ import tempfile
 from unittest.mock import ANY
 
 import pytest
-from constant_sorrow.constants import FEDERATED_ADDRESS
 from cryptography.hazmat.primitives.serialization import Encoding
 from flask import Flask
+
+from nucypher_core.umbral import SecretKey, Signer
 
 from nucypher.characters.lawful import Alice, Bob, Ursula
 from nucypher.config.constants import TEMPORARY_DOMAIN
 from nucypher.crypto.keystore import Keystore
 from nucypher.crypto.powers import DecryptingPower, DelegatingPower, TLSHostingPower
-from nucypher.crypto.umbral_adapter import SecretKey, Signer
 from nucypher.datastore.datastore import Datastore
 from nucypher.network.server import ProxyRESTServer
+from nucypher.policy.payment import FreeReencryptions
 from nucypher.utilities.networking import LOOPBACK_ADDRESS
 from tests.constants import INSECURE_DEVELOPMENT_PASSWORD
 from tests.utils.matchers import IsType
@@ -68,7 +69,7 @@ def test_generate_alice_keystore(temp_dir_path):
     assert delegating_pubkey == another_delegating_pubkey
 
 
-def test_characters_use_keystore(temp_dir_path):
+def test_characters_use_keystore(temp_dir_path, test_registry_source_manager):
     keystore = Keystore.generate(
         password=INSECURE_DEVELOPMENT_PASSWORD,
         keystore_dir=temp_dir_path
@@ -82,7 +83,8 @@ def test_characters_use_keystore(temp_dir_path):
            rest_host=LOOPBACK_ADDRESS,
            rest_port=12345,
            db_filepath=tempfile.mkdtemp(),
-           domain=TEMPORARY_DOMAIN)
+           domain=TEMPORARY_DOMAIN,
+           payment_method=FreeReencryptions())
     alice.disenchant()  # To stop Alice's publication threadpool.  TODO: Maybe only start it at first enactment?
 
 
@@ -108,7 +110,7 @@ def test_tls_hosting_certificate_remains_the_same(temp_dir_path, mocker):
     assert ursula.keystore is keystore
     assert ursula.certificate == ursula._crypto_power.power_ups(TLSHostingPower).keypair.certificate
 
-    original_certificate_bytes = ursula.certificate.public_bytes(encoding=Encoding.PEM)
+    original_certificate_bytes = ursula.certificate.public_bytes(encoding=Encoding.DER)
     ursula.disenchant()
     del ursula
 
@@ -122,7 +124,7 @@ def test_tls_hosting_certificate_remains_the_same(temp_dir_path, mocker):
                               domain=TEMPORARY_DOMAIN)
 
     assert recreated_ursula.keystore is keystore
-    assert recreated_ursula.certificate.public_bytes(encoding=Encoding.PEM) == original_certificate_bytes
+    assert recreated_ursula.certificate.public_bytes(encoding=Encoding.DER) == original_certificate_bytes
     tls_hosting_power = recreated_ursula._crypto_power.power_ups(TLSHostingPower)
     spy_rest_server_init.assert_called_once_with(ANY,  # self
                                                  rest_host=LOOPBACK_ADDRESS,

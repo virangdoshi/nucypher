@@ -21,19 +21,23 @@ import pytest
 import pytest_twisted as pt
 from twisted.internet import threads
 
-from nucypher.blockchain.eth.actors import Worker
+from nucypher.blockchain.eth.actors import Operator
 from nucypher.characters.base import Learner
 from nucypher.cli.literature import NO_CONFIGURATIONS_ON_DISK
 from nucypher.cli.main import nucypher_cli
 from nucypher.config.characters import UrsulaConfiguration
-from nucypher.config.constants import NUCYPHER_ENVVAR_KEYSTORE_PASSWORD, TEMPORARY_DOMAIN
+from nucypher.config.constants import (
+    NUCYPHER_ENVVAR_KEYSTORE_PASSWORD,
+    TEMPORARY_DOMAIN,
+)
 from nucypher.network.nodes import Teacher
 from nucypher.utilities.networking import LOOPBACK_ADDRESS, UnknownIPAddress
 from tests.constants import (
     FAKE_PASSWORD_CONFIRMED,
     INSECURE_DEVELOPMENT_PASSWORD,
     MOCK_IP_ADDRESS,
-    TEST_PROVIDER_URI,
+    TEST_ETH_PROVIDER_URI,
+    TEST_POLYGON_PROVIDER_URI,
     YES_ENTER
 )
 from tests.utils.ursula import select_test_port, start_pytest_ursula_services
@@ -90,7 +94,9 @@ def test_ursula_run_with_prometheus_but_no_metrics_port(click_runner):
                                          catch_exceptions=False)
 
     assert result.exit_code != 0
-    expected_error = f"Error: --metrics-port is required when using --prometheus"
+    # TODO prometheus not currently supported - follow-up in #2928
+    expected_error = f"prometheus is not currently supported"
+    # expected_error = f"Error: --metrics-port is required when using --prometheus"
     assert expected_error in result.output
 
 
@@ -171,14 +177,16 @@ def test_persistent_node_storage_integration(click_runner,
                                              blockchain_ursulas,
                                              agency_local_registry):
 
-    alice, ursula, another_ursula, felix, staker, *all_yall = testerchain.unassigned_accounts
+    alice, ursula, another_ursula, staking_provider, *all_yall = testerchain.unassigned_accounts
     filename = UrsulaConfiguration.generate_filename()
     another_ursula_configuration_file_location = custom_filepath / filename
 
     init_args = ('ursula', 'init',
-                 '--provider', TEST_PROVIDER_URI,
-                 '--worker-address', another_ursula,
+                 '--eth-provider', TEST_ETH_PROVIDER_URI,
+                 '--payment-provider', TEST_POLYGON_PROVIDER_URI,
+                 '--operator-address', another_ursula,
                  '--network', TEMPORARY_DOMAIN,
+                 '--payment-network', TEMPORARY_DOMAIN,
                  '--rest-host', MOCK_IP_ADDRESS,
                  '--config-root', str(custom_filepath.absolute()),
                  '--registry-filepath', str(agency_local_registry.filepath.absolute()),
@@ -202,9 +210,9 @@ def test_persistent_node_storage_integration(click_runner,
                 '--config-file', str(another_ursula_configuration_file_location.absolute()),
                 '--teacher', teacher_uri)
 
-    Worker.READY_TIMEOUT = 1
-    with pytest.raises(Teacher.UnbondedWorker):
-        # Worker init success, but not bonded.
+    Operator.READY_TIMEOUT = 1
+    with pytest.raises(Operator.ActorError):
+        # Operator init success, but not bonded.
         result = yield threads.deferToThread(click_runner.invoke,
                                              nucypher_cli, run_args,
                                              catch_exceptions=False,
@@ -219,8 +227,8 @@ def test_persistent_node_storage_integration(click_runner,
                 '--interactive',
                 '--config-file',  str(another_ursula_configuration_file_location.absolute()))
 
-    with pytest.raises(Teacher.UnbondedWorker):
-        # Worker init success, but not bonded.
+    with pytest.raises(Operator.ActorError):
+        # Operator init success, but not bonded.
         result = yield threads.deferToThread(click_runner.invoke,
                                              nucypher_cli, run_args,
                                              catch_exceptions=False,
@@ -241,12 +249,12 @@ def test_ursula_run_ip_checkup(testerchain, custom_filepath, click_runner, mocke
     mocker.patch.object(Ursula, 'from_teacher_uri', return_value=teacher)
 
     # Mock worker qualification
-    staker = blockchain_ursulas.pop()
+    staking_provider = blockchain_ursulas.pop()
 
-    def set_staker_address(worker, *args, **kwargs):
-        worker.checksum_address = staker.checksum_address
+    def set_staking_provider_address(operator, *args, **kwargs):
+        operator.checksum_address = staking_provider.checksum_address
         return True
-    monkeypatch.setattr(Worker, 'block_until_ready', set_staker_address)
+    monkeypatch.setattr(Operator, 'block_until_ready', set_staking_provider_address)
 
     # Setup
     teacher = blockchain_ursulas.pop()

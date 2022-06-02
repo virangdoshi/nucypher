@@ -1,12 +1,9 @@
-FROM python:3.8.7-slim
-
-# Update
-RUN apt update -y && apt upgrade -y
-RUN apt install patch gcc libffi-dev wget -y
+FROM nucypher/rust-python:3.8.12
 
 WORKDIR /code
 COPY . /code
 
 RUN pip3 install .[ursula]
+RUN export PATH="$HOME/.local/bin:$PATH"
 
 CMD ["/bin/bash"]
