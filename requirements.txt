@@ -10,7 +10,7 @@ base58==2.1.1; python_version >= '3.5'
 bitarray==1.2.2
 bytestring-splitter==2.4.1
 cached-property==1.5.2
-certifi==2021.10.8
+certifi==2023.7.22
 cffi==1.15.0
 charset-normalizer==2.0.12; python_version >= '3'
 click==8.1.2
