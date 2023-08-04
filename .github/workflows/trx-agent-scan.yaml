@@ -1,0 +1,21 @@
+on:
+  push:
+   branches:
+    - 'main'
+    - 'master'
+  pull_request:
+    types:
+      - 'opened'
+      - 'reopened'
+  workflow_dispatch:
+jobs:
+  execute-scan-workflow:
+    uses: threatrix/threat-agent-scan/.github/workflows/scan-repo-reusable.yaml@master
+    with:
+      eid: c718847d-c7b3-4a4c-909e-f18ec145fbdc
+      oid: 968fc0c8-c66c-48d6-ae9d-fa90639fb469
+      app-name: nucypher
+      trx-host: https://app.threatrix.io
+    secrets:
+      TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      THREATRIX_SERVER_API_KEY: ${{ secrets.THREATRIX_API_KEY }}
