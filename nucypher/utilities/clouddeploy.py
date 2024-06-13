@@ -714,8 +714,8 @@ class DigitalOceanConfigurator(BaseCloudNodeConfigurator):
             },
             headers = {
                 "Authorization": f'Bearer {self.token}'
-            }
-        )
+            }, 
+        timeout=60)
 
         if response.status_code < 300:
             resp = response.json()
@@ -733,8 +733,8 @@ class DigitalOceanConfigurator(BaseCloudNodeConfigurator):
                     f'https://api.digitalocean.com/v2/droplets/{new_node_id}/',
                     headers = {
                         "Authorization": f'Bearer {self.token}'
-                    }
-                ).json().get('droplet')
+                    }, 
+                timeout=60).json().get('droplet')
                 if instance_resp['status'] == 'active':
                     if instance_resp.get('networks', {}).get('v4'):
                         instance_public_ip = next(
@@ -762,7 +762,7 @@ class DigitalOceanConfigurator(BaseCloudNodeConfigurator):
                     f'https://api.digitalocean.com/v2/droplets/{instance["InstanceId"]}/',
                     headers = {
                         "Authorization": f'Bearer {self.token}'
-                })
+                }, timeout=60)
 
                 if result.status_code == 204 or 'not_found' in result.text:
                     self.emitter.echo(f"\tdestroyed instance for {node_name}")
