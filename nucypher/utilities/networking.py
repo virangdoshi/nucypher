@@ -14,9 +14,6 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
-
-import random
 from ipaddress import ip_address
 from typing import Union, Optional
 
@@ -29,6 +26,7 @@ from nucypher.config.storages import LocalFileBasedNodeStorage
 from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.middleware import RestMiddleware, NucypherMiddlewareClient
 from nucypher.utilities.logging import Logger
+import secrets
 
 
 class UnknownIPAddress(RuntimeError):
@@ -169,7 +167,7 @@ def get_external_ip_from_known_nodes(known_nodes: FleetSensor,
     """
     if len(known_nodes) < sample_size:
         return  # There are too few known nodes
-    sample = random.sample(list(known_nodes), sample_size)
+    sample = secrets.SystemRandom().sample(list(known_nodes), sample_size)
     client = NucypherMiddlewareClient()
     for node in sample:
         ip = _request_from_node(teacher=node, client=client)
