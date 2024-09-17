@@ -35,7 +35,7 @@ class Datafeed(ABC):
 
     def _probe_feed(self):
         try:
-            response = requests.get(self.api_url)
+            response = requests.get(self.api_url, timeout=60)
         except requests.exceptions.ConnectionError as e:
             error = f"Failed to probe feed at {self.api_url}: {str(e)}"
             raise self.DatafeedError(error)
