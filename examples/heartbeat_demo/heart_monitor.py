@@ -14,12 +14,11 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
-import random
 import time
 import msgpack
 
 from nucypher.characters.lawful import Enrico
+import secrets
 
 
 HEART_DATA_FILENAME = 'heart_data.msgpack'
@@ -39,7 +38,7 @@ def generate_heart_rate_samples(policy_pubkey,
     for _ in range(samples):
         # Simulated heart rate data
         # Normal resting heart rate for adults: between 60 to 100 BPM
-        heart_rate = random.randint(max(60, heart_rate-5),
+        heart_rate = secrets.SystemRandom().randint(max(60, heart_rate-5),
                                     min(100, heart_rate+5))
         now += 3
 
