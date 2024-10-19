@@ -30,6 +30,7 @@ from nucypher.blockchain.eth import CONTRACT_REGISTRY_BASE
 from nucypher.blockchain.eth.networks import NetworksInventory
 from nucypher.config.constants import DEFAULT_CONFIG_ROOT
 from nucypher.utilities.logging import Logger
+from security import safe_requests
 
 
 class CanonicalRegistrySource(ABC):
@@ -82,7 +83,7 @@ class GithubRegistrySource(CanonicalRegistrySource):
         self.logger.debug(f"Downloading contract registry from {publication_endpoint}")
         try:
             # Fetch
-            response = requests.get(publication_endpoint)
+            response = safe_requests.get(publication_endpoint)
         except requests.exceptions.ConnectionError as e:
             error = f"Failed to fetch registry from {publication_endpoint}: {str(e)}"
             raise self.RegistrySourceUnavailable(error)
