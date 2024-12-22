@@ -75,7 +75,7 @@ def _request(url: str, certificate=None) -> Union[str, None]:
     """
     try:
         # 'None' or 'True' will verify self-signed certificates
-        response = requests.get(url, verify=certificate)
+        response = requests.get(url, verify=certificate, timeout=60)
     except RequestErrors:
         return None
     if response.status_code == 200:
