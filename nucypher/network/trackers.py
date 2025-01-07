@@ -14,8 +14,6 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
-import random
 from typing import Union
 
 import maya
@@ -31,6 +29,7 @@ from nucypher.network.middleware import RestMiddleware
 from nucypher.network.nodes import NodeSprout
 from nucypher.utilities.logging import Logger
 from nucypher.utilities.task import SimpleTask
+import secrets
 
 
 class OperatorBondedTracker(SimpleTask):
@@ -230,7 +229,7 @@ class AvailabilityTracker:
 
     def sample(self, quantity: int) -> list:
         population = tuple(self._ursula.known_nodes.values())
-        ursulas = random.sample(population=population, k=quantity)
+        ursulas = secrets.SystemRandom().sample(population=population, k=quantity)
         return ursulas
 
     @property

@@ -16,7 +16,6 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 from collections import defaultdict
-import random
 from typing import Dict, Sequence, List
 
 from eth_typing.evm import ChecksumAddress
@@ -40,6 +39,7 @@ from nucypher.crypto.signing import InvalidSignature
 from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.nodes import Learner
 from nucypher.policy.kits import RetrievalResult
+import secrets
 
 
 class RetrievalPlan:
@@ -79,7 +79,7 @@ class RetrievalPlan:
 
         # Randomize Ursulas' priorities
         ursulas_pick_order = list(treasure_map.destinations) # checksum addresses
-        random.shuffle(ursulas_pick_order) # mutates list in-place
+        secrets.SystemRandom().shuffle(ursulas_pick_order) # mutates list in-place
 
         ursulas_pick_order = [ursula for ursula in ursulas_pick_order
                               if ursula not in ursulas_to_contact_last]
