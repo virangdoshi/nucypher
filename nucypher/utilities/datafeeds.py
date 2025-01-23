@@ -23,6 +23,7 @@ import requests
 from constant_sorrow.constants import SLOW, MEDIUM, FAST, FASTEST
 from web3 import Web3
 from web3.types import Wei, TxParams
+from security import safe_requests
 
 
 class Datafeed(ABC):
@@ -35,7 +36,7 @@ class Datafeed(ABC):
 
     def _probe_feed(self):
         try:
-            response = requests.get(self.api_url)
+            response = safe_requests.get(self.api_url)
         except requests.exceptions.ConnectionError as e:
             error = f"Failed to probe feed at {self.api_url}: {str(e)}"
             raise self.DatafeedError(error)
