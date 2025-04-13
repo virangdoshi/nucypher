@@ -14,8 +14,6 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
-import random
 from _pydecimal import Decimal
 from typing import Callable, Dict, Union
 
@@ -33,6 +31,7 @@ from nucypher.blockchain.eth.constants import AVERAGE_BLOCK_TIME_IN_SECONDS, NUL
 from nucypher.types import ERC20UNits, NuNits, TuNits
 from nucypher.utilities.gas_strategies import EXPECTED_CONFIRMATION_TIME_IN_SECONDS
 from nucypher.utilities.logging import Logger
+import secrets
 
 
 class ERC20:
@@ -205,7 +204,7 @@ class WorkTrackerBase:
     def random_interval(cls, fails=None) -> int:
         if fails is not None and fails > 0:
             return cls.INTERVAL_FLOOR
-        return random.randint(cls.INTERVAL_FLOOR, cls.INTERVAL_CEIL)
+        return secrets.SystemRandom().randint(cls.INTERVAL_FLOOR, cls.INTERVAL_CEIL)
 
     def max_confirmation_time(self) -> int:
         expected_time = EXPECTED_CONFIRMATION_TIME_IN_SECONDS[self.gas_strategy]  # FIXME: #2447

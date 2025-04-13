@@ -14,9 +14,6 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
-
-import random
 import weakref
 from collections import deque
 from collections.abc import KeysView
@@ -29,6 +26,7 @@ from nucypher_core import FleetStateChecksum, NodeMetadata
 
 from nucypher.utilities.logging import Logger
 from .nicknames import Nickname
+import secrets
 
 
 class ArchivedFleetState(NamedTuple):
@@ -188,7 +186,7 @@ class FleetState:
 
     def shuffled(self) -> List['Ursula']:
         nodes_we_know_about = list(self._nodes.values())
-        random.shuffle(nodes_we_know_about)
+        secrets.SystemRandom().shuffle(nodes_we_know_about)
         return nodes_we_know_about
 
     def to_json(self) -> Dict:

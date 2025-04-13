@@ -18,7 +18,7 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 import json
 from pathlib import Path
 from typing import List
-import random
+import secrets
 
 _HERE = Path(__file__).parent
 with open(_HERE / 'web_colors.json') as f:
@@ -88,7 +88,7 @@ class Nickname:
         # TODO: #1823 - Workaround for new nickname every restart
         # if not seed:
         #     raise ValueError("No checksum provided to derive nickname.")
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom().Random(seed)
         nickname_symbols = rng.sample(list(_SYMBOLS), length)
         nickname_colors = rng.sample(_COLORS, length)
         characters = [
