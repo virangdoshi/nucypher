@@ -27,6 +27,7 @@ from tempfile import (
 from typing import (
     Tuple,
 )
+from security import safe_command
 
 
 def create_venv(parent_path: Path) -> Path:
@@ -42,7 +43,7 @@ def create_venv(parent_path: Path) -> Path:
     assert Path.exists(venv_path), f'venv path "{venv_path}" does not exist.'
     assert Path.exists(pip_path), f'pip executable not found at "{pip_path}"'
 
-    subprocess.run([pip_path, 'install', '-U', 'pip', 'setuptools'], check=True)
+    safe_command.run(subprocess.run, [pip_path, 'install', '-U', 'pip', 'setuptools'], check=True)
     return venv_path
 
 
@@ -58,7 +59,7 @@ def install_wheel(venv_path: Path, wheel_path: Path, extras: Tuple[str, ...] = (
         extra_suffix = f"[{','.join(extras)}]"
     else:
         extra_suffix = ""
-    subprocess.run([venv_path / 'bin' / 'pip', 'install', f"{wheel_path}{extra_suffix}"], check=True)
+    safe_command.run(subprocess.run, [venv_path / 'bin' / 'pip', 'install', f"{wheel_path}{extra_suffix}"], check=True)
 
 
 def test_install_local_wheel() -> None:
