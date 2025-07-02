@@ -82,7 +82,7 @@ class GithubRegistrySource(CanonicalRegistrySource):
         self.logger.debug(f"Downloading contract registry from {publication_endpoint}")
         try:
             # Fetch
-            response = requests.get(publication_endpoint)
+            response = requests.get(publication_endpoint, timeout=60)
         except requests.exceptions.ConnectionError as e:
             error = f"Failed to fetch registry from {publication_endpoint}: {str(e)}"
             raise self.RegistrySourceUnavailable(error)
