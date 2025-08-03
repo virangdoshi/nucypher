@@ -38,6 +38,7 @@ from nucypher.blockchain.eth.clients import PUBLIC_CHAINS
 from nucypher.blockchain.eth.networks import NetworksInventory
 from nucypher.config.constants import DEFAULT_CONFIG_ROOT, DEPLOY_DIR, NUCYPHER_ENVVAR_KEYSTORE_PASSWORD, \
     NUCYPHER_ENVVAR_OPERATOR_ETH_PASSWORD
+from security import safe_requests
 
 NODE_CONFIG_STORAGE_KEY = 'worker-configs'
 URSULA_PORT = 9151
@@ -729,7 +730,7 @@ class DigitalOceanConfigurator(BaseCloudNodeConfigurator):
             while not instance_public_ip:
                 time.sleep(1)
 
-                instance_resp = requests.get(
+                instance_resp = safe_requests.get(
                     f'https://api.digitalocean.com/v2/droplets/{new_node_id}/',
                     headers = {
                         "Authorization": f'Bearer {self.token}'

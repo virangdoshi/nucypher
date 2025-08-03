@@ -19,8 +19,6 @@
 import random
 from ipaddress import ip_address
 from typing import Union, Optional
-
-import requests
 from requests.exceptions import RequestException, HTTPError
 
 from nucypher.acumen.perception import FleetSensor
@@ -29,6 +27,7 @@ from nucypher.config.storages import LocalFileBasedNodeStorage
 from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.middleware import RestMiddleware, NucypherMiddlewareClient
 from nucypher.utilities.logging import Logger
+from security import safe_requests
 
 
 class UnknownIPAddress(RuntimeError):
@@ -75,7 +74,7 @@ def _request(url: str, certificate=None) -> Union[str, None]:
     """
     try:
         # 'None' or 'True' will verify self-signed certificates
-        response = requests.get(url, verify=certificate)
+        response = safe_requests.get(url, verify=certificate)
     except RequestErrors:
         return None
     if response.status_code == 200:
